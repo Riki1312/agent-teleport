@@ -256,13 +256,27 @@ The adapter performs these steps:
     prove App Server repair is insufficient.
 11. Update legacy indexes only when a compatibility adapter proves they are required.
 
-The Codex 0.154.0 spike confirmed that normal `thread/list` discovers the placed
-rollout, persists repaired state, and supports `thread/read` and `thread/resume` after
-an App Server restart. This matches the documented scan-and-repair behavior of
-[`useStateDbOnly`](https://learn.chatgpt.com/docs/app-server). It does not yet establish
-the commit and rollback protocol. That protocol must be tested with fault injection
-before `replace` is considered stable. Import should leave either the old valid
-session or the new valid session, never a mixture.
+The Codex 0.154.0 spike confirmed that normal `thread/list` discovers a new rollout,
+persists repaired state, and supports `thread/read` and `thread/resume` after an App
+Server restart. This matches the documented scan-and-repair behavior of
+[`useStateDbOnly`](https://learn.chatgpt.com/docs/app-server). It does not refresh an
+already indexed thread after its rollout is replaced. Replacement therefore uses
+App Server `thread/delete` to clear the old owned state before placing and repairing
+the new rollout.
+
+`replace` uses a recoverable transaction in the rollout directory:
+
+1. Recover any rollback link left by an interrupted replacement.
+2. Validate the old rollout and write the new rollout to a deterministic stage file.
+3. Hard-link the old rollout as the rollback copy and sync the directory.
+4. Ask App Server to delete the old thread and confirm its rollout is absent.
+5. Rename the staged rollout into place, repair it, and verify list and read state.
+6. Remove and sync the rollback link as the commit point.
+
+An interruption before the commit point leaves the rollback link. The next import
+deletes any partial replacement through App Server, restores the old link, repairs the
+old thread, and only then begins a new transaction. Fault-injection tests cover every
+persisted phase.
 
 ## Compatibility policy
 

@@ -253,11 +253,19 @@ type importOptions struct {
 	archive     string
 	cwd         string
 	preserveCWD bool
-	ifExists    string
+	ifExists    collisionPolicy
 	dryRun      bool
 	resume      bool
 	help        bool
 }
+
+type collisionPolicy string
+
+const (
+	collisionError   collisionPolicy = "error"
+	collisionSkip    collisionPolicy = "skip"
+	collisionReplace collisionPolicy = "replace"
+)
 
 func (a *App) importBundle(ctx context.Context, args []string) error {
 	options, err := parseImport(args)
@@ -265,7 +273,7 @@ func (a *App) importBundle(ctx context.Context, args []string) error {
 		return err
 	}
 	if options.help {
-		_, err := fmt.Fprintln(a.Stdout, "Usage: cxport import <ARCHIVE|-> [--cwd PATH | --preserve-cwd] [--if-exists error|skip] [--dry-run] [--resume]")
+		_, err := fmt.Fprintln(a.Stdout, "Usage: cxport import <ARCHIVE|-> [--cwd PATH | --preserve-cwd] [--if-exists error|skip|replace] [--dry-run] [--resume]")
 		return err
 	}
 	archive, err := a.readBundle(options.archive)
@@ -315,31 +323,57 @@ func (a *App) importBundle(ctx context.Context, args []string) error {
 	if err != nil {
 		return err
 	}
+	destination := codex.RolloutPath(home, meta)
+	if options.dryRun {
+		return a.dryRunImport(destination, meta, targetCWD, options.ifExists)
+	}
 	client, err := appserver.Start(ctx, codexBinary(), home)
 	if err != nil {
 		return err
 	}
 	defer client.Close()
+	reset := func() error { return client.Delete(meta.ID) }
+	repair := func(repairMeta codex.SessionMeta) error {
+		return verifyRepair(client, repairMeta.ID, repairMeta.CWD)
+	}
+	if err := codex.RecoverReplacement(destination, meta.ID, reset, repair); err != nil {
+		return err
+	}
 	threads, err := client.List("", false)
 	if err != nil {
 		return fmt.Errorf("check existing sessions: %w", err)
 	}
-	if findThread(threads, meta.ID) != nil {
-		if options.ifExists == "skip" {
+	existing := findThread(threads, meta.ID)
+	if existing != nil {
+		if options.ifExists == collisionSkip {
 			_, err := fmt.Fprintf(a.Stdout, "session %s already exists; skipped\n", meta.ID)
 			return err
 		}
-		return fmt.Errorf("session %s already exists", meta.ID)
+		if options.ifExists == collisionError {
+			return fmt.Errorf("session %s already exists", meta.ID)
+		}
+		if existing.Status.Type != "idle" && existing.Status.Type != "notLoaded" {
+			return fmt.Errorf("existing session %s is not quiescent (status %q)", meta.ID, existing.Status.Type)
+		}
+		if existing.Path == "" || filepath.Clean(existing.Path) != filepath.Clean(destination) {
+			return fmt.Errorf("existing session path %q does not match expected path %q", existing.Path, destination)
+		}
 	}
-	destination := codex.RolloutPath(home, meta)
-	if _, err := os.Stat(destination); err == nil {
-		return fmt.Errorf("rollout destination already exists: %s", destination)
-	} else if !errors.Is(err, os.ErrNotExist) {
-		return fmt.Errorf("check rollout destination: %w", err)
+	if existing == nil {
+		if _, err := os.Stat(destination); err == nil {
+			return fmt.Errorf("rollout destination already exists: %s", destination)
+		} else if !errors.Is(err, os.ErrNotExist) {
+			return fmt.Errorf("check rollout destination: %w", err)
+		}
 	}
-	if options.dryRun {
-		_, err := fmt.Fprintf(a.Stdout, "import valid: %s -> %s\n", meta.ID, targetCWD)
-		return err
+	if existing != nil {
+		if err := codex.ReplaceRollout(destination, rollout, meta, reset, repair); err != nil {
+			return fmt.Errorf("replace session %s: %w", meta.ID, err)
+		}
+		if _, err := fmt.Fprintf(a.Stdout, "replaced %s in %s\nresume with: codex resume %s\n", meta.ID, targetCWD, meta.ID); err != nil {
+			return err
+		}
+		return a.resumeIfRequested(ctx, options.resume, targetCWD, meta.ID)
 	}
 	if err := placeRollout(destination, rollout); err != nil {
 		return err
@@ -354,15 +388,51 @@ func (a *App) importBundle(ctx context.Context, args []string) error {
 	if _, err := fmt.Fprintf(a.Stdout, "imported %s into %s\nresume with: codex resume %s\n", meta.ID, targetCWD, meta.ID); err != nil {
 		return err
 	}
-	if options.resume {
-		command := exec.CommandContext(ctx, codexBinary(), "resume", meta.ID)
-		command.Dir = targetCWD
-		command.Stdin = a.Stdin
-		command.Stdout = a.Stdout
-		command.Stderr = a.Stderr
-		if err := command.Run(); err != nil {
-			return fmt.Errorf("resume imported session: %w", err)
-		}
+	return a.resumeIfRequested(ctx, options.resume, targetCWD, meta.ID)
+}
+
+func (a *App) dryRunImport(destination string, meta codex.SessionMeta, targetCWD string, policy collisionPolicy) error {
+	pending, err := codex.ReplacementPending(destination)
+	if err != nil {
+		return fmt.Errorf("inspect replacement recovery state: %w", err)
+	}
+	if pending {
+		return errors.New("an interrupted replacement requires recovery; rerun without --dry-run")
+	}
+	_, existingMeta, err := codex.StableRollout(destination)
+	if errors.Is(err, os.ErrNotExist) {
+		_, writeErr := fmt.Fprintf(a.Stdout, "import valid: %s -> %s\n", meta.ID, targetCWD)
+		return writeErr
+	}
+	if err != nil {
+		return fmt.Errorf("inspect existing rollout: %w", err)
+	}
+	if existingMeta.ID != meta.ID {
+		return fmt.Errorf("rollout destination belongs to session %s", existingMeta.ID)
+	}
+	switch policy {
+	case collisionSkip:
+		_, err = fmt.Fprintf(a.Stdout, "session %s already exists; would skip\n", meta.ID)
+		return err
+	case collisionReplace:
+		_, err = fmt.Fprintf(a.Stdout, "replacement valid: %s -> %s\n", meta.ID, targetCWD)
+		return err
+	default:
+		return fmt.Errorf("session %s already exists", meta.ID)
+	}
+}
+
+func (a *App) resumeIfRequested(ctx context.Context, resume bool, cwd, sessionID string) error {
+	if !resume {
+		return nil
+	}
+	command := exec.CommandContext(ctx, codexBinary(), "resume", sessionID)
+	command.Dir = cwd
+	command.Stdin = a.Stdin
+	command.Stdout = a.Stdout
+	command.Stderr = a.Stderr
+	if err := command.Run(); err != nil {
+		return fmt.Errorf("resume imported session: %w", err)
 	}
 	return nil
 }
@@ -454,7 +524,7 @@ func parseExport(args []string) (exportOptions, error) {
 }
 
 func parseImport(args []string) (importOptions, error) {
-	options := importOptions{ifExists: "error"}
+	options := importOptions{ifExists: collisionError}
 	for index := 0; index < len(args); index++ {
 		arg := args[index]
 		switch {
@@ -474,12 +544,12 @@ func parseImport(args []string) (importOptions, error) {
 			if arg == "--cwd" {
 				options.cwd = args[index]
 			} else {
-				options.ifExists = args[index]
+				options.ifExists = collisionPolicy(args[index])
 			}
 		case strings.HasPrefix(arg, "--cwd="):
 			options.cwd = strings.TrimPrefix(arg, "--cwd=")
 		case strings.HasPrefix(arg, "--if-exists="):
-			options.ifExists = strings.TrimPrefix(arg, "--if-exists=")
+			options.ifExists = collisionPolicy(strings.TrimPrefix(arg, "--if-exists="))
 		case strings.HasPrefix(arg, "-") && arg != "-":
 			return options, &UsageError{Message: fmt.Sprintf("unknown import option %q", arg)}
 		case options.archive == "":
@@ -497,11 +567,8 @@ func parseImport(args []string) (importOptions, error) {
 	if options.cwd != "" && options.preserveCWD {
 		return options, &UsageError{Message: "--cwd and --preserve-cwd cannot be used together"}
 	}
-	if options.ifExists != "error" && options.ifExists != "skip" {
-		if options.ifExists == "replace" {
-			return options, &UsageError{Message: "--if-exists replace is not implemented until rollback is fault-tested"}
-		}
-		return options, &UsageError{Message: "--if-exists must be error or skip"}
+	if options.ifExists != collisionError && options.ifExists != collisionSkip && options.ifExists != collisionReplace {
+		return options, &UsageError{Message: "--if-exists must be error, skip, or replace"}
 	}
 	if options.dryRun && options.resume {
 		return options, &UsageError{Message: "--dry-run and --resume cannot be used together"}

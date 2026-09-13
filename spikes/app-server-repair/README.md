@@ -33,6 +33,11 @@ go run ./spikes/app-server-repair \
 The probe does not start a turn or call a model, so it should not require Codex
 authentication.
 
+Pass `-allow-existing` with an already imported copy of the same rollout to probe
+whether scan-and-repair refreshes an indexed thread after atomic file replacement.
+Add `-delete-existing` to clear the existing rollout and index through App Server
+before placing the replacement.
+
 ## Result
 
 With Codex 0.154.0, scan-and-repair made the placed rollout available to state-only
@@ -40,3 +45,7 @@ listing, `thread/read`, and `thread/resume`, including after an App Server resta
 SQLite mutation or legacy index update was needed. This is evidence for a
 version-specific adapter, not a compatibility guarantee for other Codex releases or
 rollout layouts.
+
+Replacing an already indexed rollout without deleting its App Server state retained
+the old workspace metadata. Calling `thread/delete`, placing the replacement, and
+then scanning repaired the new workspace correctly and persisted it across restart.

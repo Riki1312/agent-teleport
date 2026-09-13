@@ -103,6 +103,9 @@ func ValidateRollout(data []byte) (SessionMeta, error) {
 	if id == "" || first.Payload.CWD == "" || first.Payload.Timestamp == "" {
 		return SessionMeta{}, errors.New("session metadata is missing id, cwd, or timestamp")
 	}
+	if !validSessionID(id) {
+		return SessionMeta{}, fmt.Errorf("session ID %q is not a UUIDv7", id)
+	}
 	timestamp, err := time.Parse(time.RFC3339Nano, first.Payload.Timestamp)
 	if err != nil {
 		return SessionMeta{}, fmt.Errorf("parse session timestamp: %w", err)
@@ -128,6 +131,27 @@ func ValidateRollout(data []byte) (SessionMeta, error) {
 		return SessionMeta{}, errors.New("rollout does not end at a completed turn")
 	}
 	return SessionMeta{ID: id, CWD: first.Payload.CWD, Timestamp: timestamp}, nil
+}
+
+func validSessionID(id string) bool {
+	if len(id) != 36 || id[14] != '7' {
+		return false
+	}
+	for index := 0; index < len(id); index++ {
+		if index == 8 || index == 13 || index == 18 || index == 23 {
+			if id[index] != '-' {
+				return false
+			}
+			continue
+		}
+		character := id[index]
+		if !((character >= '0' && character <= '9') ||
+			(character >= 'a' && character <= 'f') ||
+			(character >= 'A' && character <= 'F')) {
+			return false
+		}
+	}
+	return true
 }
 
 func RemapWorkspace(data []byte, targetCWD string) ([]byte, SessionMeta, error) {

@@ -25,9 +25,9 @@ go build ./cmd/cxport
 ./cxport import ./session.cxport
 ```
 
-The interactive picker and collision replacement are intentionally deferred. Until
-the picker lands, pass a session ID or `--last` to `export`. Existing sessions fail
-closed by default and may only be skipped explicitly.
+The interactive picker is intentionally deferred. Until it lands, pass a session ID
+or `--last` to `export`. Existing sessions fail closed by default; import supports
+explicit `skip` and recoverable `replace` policies.
 
 ## Initial scope
 

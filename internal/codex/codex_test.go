@@ -48,6 +48,18 @@ func TestValidateRolloutRejectsIncompleteTurn(t *testing.T) {
 	}
 }
 
+func TestValidateRolloutRejectsUnsafeSessionID(t *testing.T) {
+	source := bytes.Replace(
+		fixtureRollout("/source/workspace"),
+		[]byte(testSessionID),
+		[]byte("../../../../tmp/not-a-session-id"),
+		1,
+	)
+	if _, err := ValidateRollout(source); err == nil || !strings.Contains(err.Error(), "UUIDv7") {
+		t.Fatalf("ValidateRollout error = %v", err)
+	}
+}
+
 func TestRolloutPath(t *testing.T) {
 	meta := SessionMeta{
 		ID:        testSessionID,

@@ -102,3 +102,17 @@ Chronological implementation detail belongs in `sessions/`.
 - `impact`: Export fails closed during an active turn. The archive always ends at a
   replayable turn boundary, even when the source CLI remains open.
 - `evidence`: `internal/codex`, `internal/codex/codex_test.go`.
+
+### 2026-09-13 - Replace through a recoverable rollback link
+
+- `decision`: Replace a colliding Codex 0.154.0 session by hard-linking its rollout as
+  a rollback copy, deleting the old thread through App Server, placing and repairing
+  the new rollout, then removing the rollback link as the commit point.
+- `rationale`: App Server does not refresh an indexed thread when only its file is
+  overwritten. The rollback link preserves the old rollout across deletion without
+  copying or mutating its bytes.
+- `impact`: Any pre-commit interruption is automatically rolled back on the next
+  import. Dry-run detects recovery markers but never performs recovery or starts App
+  Server.
+- `evidence`: `internal/codex/replace.go`, `internal/codex/replace_test.go`,
+  `spikes/app-server-repair`.

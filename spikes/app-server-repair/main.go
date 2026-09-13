@@ -65,12 +65,16 @@ func main() {
 	var targetHome string
 	var targetCWD string
 	var remapScope string
+	var allowExisting bool
+	var deleteExisting bool
 
 	flag.StringVar(&codexPath, "codex", "codex", "path to the Codex CLI")
 	flag.StringVar(&rolloutPath, "rollout", "", "source rollout JSONL")
 	flag.StringVar(&targetHome, "target-home", "", "empty target CODEX_HOME")
 	flag.StringVar(&targetCWD, "target-cwd", "", "workspace recorded in the imported rollout")
 	flag.StringVar(&remapScope, "remap", "workspace-metadata", "CWD fields to remap: workspace-metadata or session-meta")
+	flag.BoolVar(&allowExisting, "allow-existing", false, "replace an existing rollout to probe state refresh")
+	flag.BoolVar(&deleteExisting, "delete-existing", false, "ask App Server to delete existing thread state before replacement")
 	flag.Parse()
 
 	if rolloutPath == "" || targetHome == "" || targetCWD == "" {
@@ -81,8 +85,14 @@ func main() {
 	if err != nil {
 		fail(err)
 	}
-	if err := requireEmptyDirectory(targetHome); err != nil {
-		fail(err)
+	if allowExisting {
+		if err := os.MkdirAll(targetHome, 0o700); err != nil {
+			fail(fmt.Errorf("create target home: %w", err))
+		}
+	} else {
+		if err := requireEmptyDirectory(targetHome); err != nil {
+			fail(err)
+		}
 	}
 	if err := os.MkdirAll(targetCWD, 0o700); err != nil {
 		fail(fmt.Errorf("create target workspace: %w", err))
@@ -104,6 +114,11 @@ func main() {
 	before, err := c.list("", true)
 	if err != nil {
 		fail(fmt.Errorf("state-only list before placement: %w", err))
+	}
+	if deleteExisting {
+		if _, err := c.call("thread/delete", map[string]any{"threadId": meta.id}); err != nil {
+			fail(fmt.Errorf("delete existing thread: %w", err))
+		}
 	}
 
 	destination, err := placeRollout(targetHome, rolloutPath, meta)

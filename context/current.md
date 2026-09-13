@@ -29,8 +29,9 @@
 
 1. Convert the manual isolated-home transfer into a repeatable E2E test without
    committing session contents.
-2. Define and fault-test the collision replacement and rollback protocol.
-3. Add the Bubble Tea picker over the working non-interactive export path.
+2. Expand supported Codex versions using captured layout fingerprints and black-box
+   App Server tests.
+3. Add the Bubble Tea picker after the non-interactive safety path is mature.
 
 ## Open questions
 
@@ -49,3 +50,5 @@
   rollout; changing only `session_meta.payload.cwd` is insufficient.
 - Export accepts only stable rollouts ending in `task_complete`; active turns fail
   closed.
+- `--if-exists replace` uses an fsynced rollback link, App Server deletion and repair,
+  and automatic recovery of every pre-commit interruption phase.

@@ -16,11 +16,21 @@ func TestParseImportRejectsUnsafeCombinations(t *testing.T) {
 	tests := [][]string{
 		{"session.cxport", "--cwd", "/target", "--preserve-cwd"},
 		{"session.cxport", "--dry-run", "--resume"},
-		{"session.cxport", "--if-exists", "replace"},
+		{"session.cxport", "--if-exists", "overwrite"},
 	}
 	for _, arguments := range tests {
 		if _, err := parseImport(arguments); err == nil {
 			t.Fatalf("parseImport(%q) succeeded", arguments)
 		}
+	}
+}
+
+func TestParseImportAcceptsReplace(t *testing.T) {
+	options, err := parseImport([]string{"session.cxport", "--if-exists", "replace"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if options.ifExists != collisionReplace {
+		t.Fatalf("ifExists = %q", options.ifExists)
 	}
 }
