@@ -1,0 +1,11 @@
+# Build output
+/cxport
+/dist/
+/coverage.out
+
+# Session archives can contain sensitive data.
+*.cxport
+
+# Editors and operating systems
+.DS_Store
+*.swp
