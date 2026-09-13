@@ -28,8 +28,9 @@ and validated paths instead of loosely related strings or booleans.
 
 ### Fail honestly
 
-Reject unknown Codex schemas, archive versions, and inconsistent session records with
-actionable errors. Do not guess, silently repair, or report partial success.
+Reject unknown Codex storage layouts, archive versions, and inconsistent session
+records with actionable errors. Do not guess, silently repair, or report partial
+success.
 
 ### Preserve boundaries
 

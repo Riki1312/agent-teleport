@@ -27,17 +27,14 @@
 
 ## Next work
 
-1. Build an isolated App Server repair spike with separate source and target
-   `CODEX_HOME` directories.
-2. Determine whether placing a valid rollout followed by `thread/list` repairs all
-   state required by `thread/read` and `thread/resume`.
-3. Record the observed compatibility boundary and update `ARCHITECTURE.md` before
-   building the full archive workflow.
+1. Turn the spike's event classification into sanitized fixtures and adapter tests.
+2. Define the import commit, collision, and rollback protocol with fault injection.
+3. Build the smallest production skeleton around App Server discovery and archive
+   inspection.
 
 ## Open questions
 
-- Which Codex versions and history modes can be imported through App Server repair?
-- Which session-related state, if any, cannot be reconstructed from the rollout?
+- Which additional Codex versions and rollout layouts pass the repair probe?
 - What is the smallest reliable quiescence check for export?
 
 ## Repository state
@@ -45,3 +42,7 @@
 - Architecture and repository conventions are documented.
 - The Go module targets Go 1.25 or newer.
 - No production packages or dependencies have been added yet.
+- The Codex 0.154.0 spike proves rollout-only App Server repair, read, resume, and
+  restart persistence in an isolated target home.
+- Workspace remapping must cover authoritative workspace metadata throughout the
+  rollout; changing only `session_meta.payload.cwd` is insufficient.

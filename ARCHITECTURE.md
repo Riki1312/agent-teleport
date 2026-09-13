@@ -3,8 +3,7 @@
 ## Status
 
 This document describes the intended version 1 architecture. Codex session storage is
-not a public compatibility boundary, so compatibility spikes may refine provider
-details and the provisional payload layout recorded here.
+not a public compatibility boundary, so provider details remain version-gated.
 
 ## Purpose
 
@@ -133,8 +132,8 @@ Codex state.
 cxport doctor [--json]
 ```
 
-Doctor reports the detected Codex version, Codex home, session store, state database,
-schema compatibility, and filesystem access. It never changes Codex state.
+Doctor reports the detected Codex version, Codex home, session store, required App
+Server capabilities, and filesystem access. It never changes Codex state.
 
 ### Interactive picker
 
@@ -175,9 +174,9 @@ The manifest schema will be defined formally before the first stable release.
 Unknown required fields or unsupported format versions cause a hard failure.
 
 `rollout.jsonl` contains the original rollout bytes. Version 1 does not copy the source
-SQLite database. The App Server repair spike will determine whether any additional
-session-specific payload is required; it must not expose unrelated sessions or bind
-the archive to a complete database snapshot.
+SQLite database. The initial App Server probe reconstructed the thread from this file
+alone; additional payload may be introduced only when a supported-version test proves
+it necessary.
 
 `checksums.sha256` detects accidental corruption of every payload entry. It is not a
 digital signature and does not establish who created the archive.
@@ -237,12 +236,15 @@ concurrent Codex activity. It must not copy a live database file directly.
 The adapter performs these steps:
 
 1. Spool and validate the entire archive without changing local state.
-2. Confirm the provider, archive version, Codex version, and target schema are
+2. Confirm the provider, archive version, Codex version, and rollout layout are
    supported.
 3. Resolve and canonicalize the target workspace.
 4. Detect an existing session ID and apply the selected collision policy.
 5. Create a private staging directory and construct the destination rollout.
-6. Remap provider workspace metadata when requested.
+6. Remap the format-specific workspace metadata required by the installed Codex
+   version. For Codex 0.154.0 this includes workspace fields in `session_meta`,
+   `world_state`, `turn_context`, and `thread_settings_applied` events; changing only
+   the first line is insufficient.
 7. Atomically place the rollout using an ordering that can be recovered after
    interruption.
 8. Ask Codex App Server to scan the session store and repair its owned index state.
@@ -252,17 +254,22 @@ The adapter performs these steps:
     prove App Server repair is insufficient.
 11. Update legacy indexes only when a compatibility adapter proves they are required.
 
-The App Server repair spike must establish the precise commit and rollback protocol.
-That protocol must be tested with fault injection before `replace` is considered
-stable. Import should leave either the old valid session or the new valid session,
-never a mixture.
+The Codex 0.154.0 spike confirmed that normal `thread/list` discovers the placed
+rollout, persists repaired state, and supports `thread/read` and `thread/resume` after
+an App Server restart. This matches the documented scan-and-repair behavior of
+[`useStateDbOnly`](https://learn.chatgpt.com/docs/app-server). It does not yet establish
+the commit and rollback protocol. That protocol must be tested with fault injection
+before `replace` is considered stable. Import should leave either the old valid
+session or the new valid session, never a mixture.
 
 ## Compatibility policy
 
 Codex local storage is treated as a versioned private implementation detail.
 
-- Each adapter declares the Codex versions and schema fingerprints it supports.
-- Unknown schemas fail closed with a diagnostic from `cxport doctor`.
+- Each adapter declares the Codex versions, rollout layouts, and App Server
+  capabilities it supports.
+- Unknown event layouts or missing capabilities fail closed with a diagnostic from
+  `cxport doctor`.
 - Import compatibility is directional: a bundle that can be inspected may still be
   too new or too old to import into the installed Codex version.
 - Schema introspection is used to recognize known layouts, not to guess how unknown

@@ -80,3 +80,15 @@ Chronological implementation detail belongs in `sessions/`.
   the first support claim keeps the compatibility surface honest.
 - `impact`: Windows-specific behavior is not a version 1 release requirement.
 - `evidence`: `README.md`, `ARCHITECTURE.md`, `context/current.md`.
+
+### 2026-09-13 - Use App Server repair for Codex 0.154.0
+
+- `decision`: Import the rollout atomically, ask App Server to scan and repair its
+  owned state, then verify the result through state-only list, read, and resume. Do
+  not mutate SQLite or legacy indexes for Codex 0.154.0.
+- `rationale`: The isolated spike persisted a usable remapped thread across an App
+  Server restart using only the rollout. First-line-only CWD replacement failed;
+  format-specific workspace metadata throughout the rollout is authoritative.
+- `impact`: The initial adapter stays rollout-only and version-gated. Workspace
+  remapping covers known metadata events but does not rewrite recorded tool results.
+- `evidence`: `spikes/app-server-repair`, `ARCHITECTURE.md`.
