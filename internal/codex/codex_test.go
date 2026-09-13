@@ -11,9 +11,11 @@ import (
 
 const testSessionID = "01999999-1111-7777-8888-222222222222"
 
+var testCompatibility = compatibilities["0.154.0"]
+
 func TestValidateAndRemapWorkspace(t *testing.T) {
 	source := fixtureRollout("/source/workspace")
-	meta, err := ValidateRollout(source)
+	meta, err := testCompatibility.ValidateRollout(source)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -21,7 +23,7 @@ func TestValidateAndRemapWorkspace(t *testing.T) {
 		t.Fatalf("unexpected metadata: %#v", meta)
 	}
 
-	remapped, remappedMeta, err := RemapWorkspace(source, "/target/workspace")
+	remapped, remappedMeta, err := testCompatibility.RemapWorkspace(source, "/target/workspace")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -34,7 +36,7 @@ func TestValidateAndRemapWorkspace(t *testing.T) {
 	if !bytes.Contains(remapped, []byte(`"cwd":"file:///source/workspace"`)) {
 		t.Fatal("recorded tool result path was unexpectedly rewritten")
 	}
-	if _, err := ValidateRollout(remapped); err != nil {
+	if _, err := testCompatibility.ValidateRollout(remapped); err != nil {
 		t.Fatalf("remapped rollout is invalid: %v", err)
 	}
 }
@@ -43,7 +45,7 @@ func TestValidateRolloutRejectsIncompleteTurn(t *testing.T) {
 	source := fixtureRollout("/source/workspace")
 	lastLine := bytes.LastIndex(source[:len(source)-1], []byte{'\n'})
 	incomplete := append([]byte(nil), source[:lastLine+1]...)
-	if _, err := ValidateRollout(incomplete); err == nil || !strings.Contains(err.Error(), "completed turn") {
+	if _, err := testCompatibility.ValidateRollout(incomplete); err == nil || !strings.Contains(err.Error(), "completed turn") {
 		t.Fatalf("ValidateRollout error = %v", err)
 	}
 }
@@ -55,7 +57,7 @@ func TestValidateRolloutRejectsUnsafeSessionID(t *testing.T) {
 		[]byte("../../../../tmp/not-a-session-id"),
 		1,
 	)
-	if _, err := ValidateRollout(source); err == nil || !strings.Contains(err.Error(), "UUIDv7") {
+	if _, err := testCompatibility.ValidateRollout(source); err == nil || !strings.Contains(err.Error(), "UUIDv7") {
 		t.Fatalf("ValidateRollout error = %v", err)
 	}
 }
@@ -66,7 +68,7 @@ func TestRolloutPath(t *testing.T) {
 		Timestamp: time.Date(2026, 9, 13, 9, 58, 44, 0, time.UTC),
 	}
 	want := filepath.Join("/codex", "sessions", "2026", "09", "13", "rollout-2026-09-13T09-58-44-"+testSessionID+".jsonl")
-	if got := RolloutPath("/codex", meta); got != want {
+	if got := testCompatibility.RolloutPath("/codex", meta); got != want {
 		t.Fatalf("RolloutPath() = %q, want %q", got, want)
 	}
 }

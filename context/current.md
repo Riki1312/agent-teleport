@@ -27,10 +27,10 @@
 
 ## Next work
 
-1. Convert the manual isolated-home transfer into a repeatable E2E test without
-   committing session contents.
-2. Expand supported Codex versions using captured layout fingerprints and black-box
-   App Server tests.
+1. Add CI coverage with a pinned Codex 0.154.0 installation and require the two-home
+   E2E test there.
+2. Expand supported Codex versions using sanitized fixtures, captured layout
+   fingerprints, and black-box App Server tests.
 3. Add the Bubble Tea picker after the non-interactive safety path is mature.
 
 ## Open questions
@@ -52,3 +52,7 @@
   closed.
 - `--if-exists replace` uses an fsynced rollback link, App Server deletion and repair,
   and automatic recovery of every pre-commit interruption phase.
+- Codex behavior is selected from an exact-version compatibility table covering
+  completion, workspace remapping, rollout filenames, and App Server capabilities.
+- A credential-free two-home E2E test covers archive fidelity, inspect, piped
+  transfer, collisions, replacement recovery, App Server repair, and restart/resume.

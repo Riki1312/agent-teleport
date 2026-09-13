@@ -43,11 +43,7 @@ func Version(codexPath string) (string, error) {
 	return fields[1], nil
 }
 
-func SupportsRemap(version string) bool {
-	return version == "0.154.0"
-}
-
-func StableRollout(path string) ([]byte, SessionMeta, error) {
+func (c Compatibility) StableRollout(path string) ([]byte, SessionMeta, error) {
 	before, err := os.Stat(path)
 	if err != nil {
 		return nil, SessionMeta{}, fmt.Errorf("stat rollout: %w", err)
@@ -66,14 +62,14 @@ func StableRollout(path string) ([]byte, SessionMeta, error) {
 	if before.Size() != after.Size() || !before.ModTime().Equal(after.ModTime()) {
 		return nil, SessionMeta{}, errors.New("rollout changed while it was being read")
 	}
-	meta, err := ValidateRollout(data)
+	meta, err := c.ValidateRollout(data)
 	if err != nil {
 		return nil, SessionMeta{}, err
 	}
 	return data, meta, nil
 }
 
-func ValidateRollout(data []byte) (SessionMeta, error) {
+func (c Compatibility) ValidateRollout(data []byte) (SessionMeta, error) {
 	if len(data) == 0 || data[len(data)-1] != '\n' {
 		return SessionMeta{}, errors.New("rollout does not end with a complete JSONL record")
 	}
@@ -118,16 +114,11 @@ func ValidateRollout(data []byte) (SessionMeta, error) {
 			return SessionMeta{}, fmt.Errorf("rollout line %d is not valid JSON", index+2)
 		}
 	}
-	var last struct {
-		Type    string `json:"type"`
-		Payload struct {
-			Type string `json:"type"`
-		} `json:"payload"`
-	}
+	var last map[string]any
 	if err := json.Unmarshal(lines[len(lines)-1], &last); err != nil {
 		return SessionMeta{}, fmt.Errorf("decode final rollout event: %w", err)
 	}
-	if last.Type != "event_msg" || last.Payload.Type != "task_complete" {
+	if !c.isCompleteEvent(last) {
 		return SessionMeta{}, errors.New("rollout does not end at a completed turn")
 	}
 	return SessionMeta{ID: id, CWD: first.Payload.CWD, Timestamp: timestamp}, nil
@@ -154,8 +145,8 @@ func validSessionID(id string) bool {
 	return true
 }
 
-func RemapWorkspace(data []byte, targetCWD string) ([]byte, SessionMeta, error) {
-	meta, err := ValidateRollout(data)
+func (c Compatibility) RemapWorkspace(data []byte, targetCWD string) ([]byte, SessionMeta, error) {
+	meta, err := c.ValidateRollout(data)
 	if err != nil {
 		return nil, SessionMeta{}, err
 	}
@@ -172,7 +163,7 @@ func RemapWorkspace(data []byte, targetCWD string) ([]byte, SessionMeta, error) 
 		if err := json.Unmarshal(line, &event); err != nil {
 			return nil, SessionMeta{}, fmt.Errorf("decode rollout line %d: %w", index+1, err)
 		}
-		if !isWorkspaceMetadata(event) {
+		if !c.isWorkspaceMetadata(event) {
 			continue
 		}
 		changed := remapCWDValues(event, meta.CWD, targetCWD)
@@ -193,7 +184,7 @@ func RemapWorkspace(data []byte, targetCWD string) ([]byte, SessionMeta, error) 
 	return bytes.Join(lines, []byte{'\n'}), meta, nil
 }
 
-func RolloutPath(home string, meta SessionMeta) string {
+func (c Compatibility) RolloutPath(home string, meta SessionMeta) string {
 	timestamp := meta.Timestamp.UTC()
 	nameTime := timestamp.Format("2006-01-02T15-04-05")
 	name := fmt.Sprintf("rollout-%s-%s.jsonl", nameTime, meta.ID)
@@ -205,19 +196,6 @@ func RolloutPath(home string, meta SessionMeta) string {
 		timestamp.Format("02"),
 		name,
 	)
-}
-
-func isWorkspaceMetadata(event map[string]any) bool {
-	eventType, _ := event["type"].(string)
-	if eventType == "session_meta" || eventType == "world_state" || eventType == "turn_context" {
-		return true
-	}
-	if eventType != "event_msg" {
-		return false
-	}
-	payload, _ := event["payload"].(map[string]any)
-	payloadType, _ := payload["type"].(string)
-	return payloadType == "thread_settings_applied"
 }
 
 func remapCWDValues(value any, sourceCWD, targetCWD string) int {

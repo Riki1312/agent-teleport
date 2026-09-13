@@ -282,6 +282,14 @@ persisted phase.
 
 Codex local storage is treated as a versioned private implementation detail.
 
+The adapter table is keyed by the exact Codex CLI version. Each entry records a
+layout fingerprint, completed-turn event, workspace metadata event set, rollout
+filename layout, and verified App Server capabilities. The initial entry is:
+
+| Codex | Layout fingerprint | Filename layout | App Server capabilities |
+| --- | --- | --- | --- |
+| 0.154.0 | `rollout-v1:task-complete:workspace-metadata-v1` | `date-partitioned-rollout-v1` | scan/repair, read, resume, delete |
+
 - Each adapter declares the Codex versions, rollout layouts, and App Server
   capabilities it supports.
 - Unknown event layouts or missing capabilities fail closed with a diagnostic from
@@ -294,6 +302,11 @@ Codex local storage is treated as a versioned private implementation detail.
   versions known to use them.
 - Supported-version fixtures and round-trip tests are kept for every compatibility
   adapter.
+
+The fixture for each entry is sanitized, contains no original conversation text or
+credentials, and must pass the credential-free two-home transfer test against that
+exact Codex version. `cxport doctor --json` exposes the selected fingerprint,
+filename layout, and capability set for diagnostics.
 
 Where a supported Codex API can perform an operation safely, it should be preferred
 over direct database mutation. Direct storage integration remains an adapter detail.

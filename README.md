@@ -45,3 +45,13 @@ in a session archive.
 The module requires Go 1.25 or newer. Repository conventions live in
 [`AGENTS.md`](AGENTS.md), and current work is tracked in
 [`context/current.md`](context/current.md).
+
+The ordinary test suite includes a credential-free, two-home transfer test when a
+supported Codex CLI is installed; otherwise that test skips. To require the installed
+Codex version to match the compatibility table, run:
+
+```sh
+CXPORT_E2E_REQUIRED=1 go test -v ./test/e2e
+```
+
+This test uses a sanitized completed rollout and never starts a model turn.

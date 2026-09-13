@@ -11,7 +11,7 @@ func TestReplaceRolloutCommitsVerifiedReplacement(t *testing.T) {
 	destination, _, newRollout, newMeta := replacementFixture(t)
 	state := &fakeReplacementState{destination: destination, cwd: "/old/workspace"}
 
-	if err := ReplaceRollout(destination, newRollout, newMeta, state.reset, state.repair); err != nil {
+	if err := testCompatibility.ReplaceRollout(destination, newRollout, newMeta, state.reset, state.repair); err != nil {
 		t.Fatal(err)
 	}
 	assertFileEquals(t, destination, newRollout)
@@ -30,7 +30,7 @@ func TestReplaceRolloutRestoresOldSessionAfterRepairFailure(t *testing.T) {
 		failCWD:     "/new/workspace",
 	}
 
-	err := ReplaceRollout(destination, newRollout, newMeta, state.reset, state.repair)
+	err := testCompatibility.ReplaceRollout(destination, newRollout, newMeta, state.reset, state.repair)
 	if err == nil || !errors.Is(err, errInjectedRepair) {
 		t.Fatalf("ReplaceRollout error = %v", err)
 	}
@@ -60,7 +60,7 @@ func TestRecoverReplacementAfterEveryCheckpoint(t *testing.T) {
 				return nil
 			}
 
-			err := replaceRollout(destination, newRollout, newMeta, state.reset, state.repair, checkpoint)
+			err := testCompatibility.replaceRollout(destination, newRollout, newMeta, state.reset, state.repair, checkpoint)
 			var interrupted *interruptionError
 			if !errors.As(err, &interrupted) {
 				t.Fatalf("replaceRollout error = %v", err)
@@ -72,7 +72,7 @@ func TestRecoverReplacementAfterEveryCheckpoint(t *testing.T) {
 			if !pending {
 				t.Fatal("interrupted replacement has no recovery marker")
 			}
-			if err := RecoverReplacement(destination, newMeta.ID, state.reset, state.repair); err != nil {
+			if err := testCompatibility.RecoverReplacement(destination, newMeta.ID, state.reset, state.repair); err != nil {
 				t.Fatal(err)
 			}
 			assertFileEquals(t, destination, oldRollout)
@@ -91,7 +91,7 @@ func TestRecoverReplacementRemovesAbandonedStage(t *testing.T) {
 		t.Fatal(err)
 	}
 	state := &fakeReplacementState{destination: destination, cwd: "/old/workspace"}
-	if err := RecoverReplacement(destination, newMeta.ID, state.reset, state.repair); err != nil {
+	if err := testCompatibility.RecoverReplacement(destination, newMeta.ID, state.reset, state.repair); err != nil {
 		t.Fatal(err)
 	}
 	assertMissing(t, stagePath(destination))
@@ -122,7 +122,7 @@ func (s *fakeReplacementState) repair(meta SessionMeta) error {
 	if err != nil {
 		return err
 	}
-	actual, err := ValidateRollout(data)
+	actual, err := testCompatibility.ValidateRollout(data)
 	if err != nil {
 		return err
 	}
@@ -137,7 +137,7 @@ func replacementFixture(t *testing.T) (string, []byte, []byte, SessionMeta) {
 	t.Helper()
 	destination := filepath.Join(t.TempDir(), "rollout.jsonl")
 	oldRollout := fixtureRollout("/old/workspace")
-	newRollout, newMeta, err := RemapWorkspace(oldRollout, "/new/workspace")
+	newRollout, newMeta, err := testCompatibility.RemapWorkspace(oldRollout, "/new/workspace")
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -116,3 +116,15 @@ Chronological implementation detail belongs in `sessions/`.
   Server.
 - `evidence`: `internal/codex/replace.go`, `internal/codex/replace_test.go`,
   `spikes/app-server-repair`.
+
+### 2026-09-13 - Gate Codex behavior through exact-version fixtures
+
+- `decision`: Select completion, workspace remapping, rollout filename, and App
+  Server capabilities from an exact Codex version table. Validate each entry with a
+  sanitized, credential-free rollout fixture and two-home black-box test.
+- `rationale`: Codex storage is private and evolving; explicit fingerprints make
+  support observable and prevent optimistic handling of unknown layouts.
+- `impact`: Unknown versions fail closed. Adding support requires both a table entry
+  and a fixture proven against that exact Codex CLI.
+- `evidence`: `internal/codex/compatibility.go`, `test/e2e/transfer_test.go`,
+  `testdata/codex`.

@@ -126,10 +126,21 @@ func (c *Client) List(cwd string, stateOnly bool) ([]Thread, error) {
 }
 
 func (c *Client) Read(id string) (Thread, error) {
-	raw, err := c.call("thread/read", map[string]any{
+	return c.threadResponse("thread/read", map[string]any{
 		"threadId":     id,
 		"includeTurns": false,
-	})
+	}, id)
+}
+
+func (c *Client) Resume(id, cwd string) (Thread, error) {
+	return c.threadResponse("thread/resume", map[string]any{
+		"threadId": id,
+		"cwd":      cwd,
+	}, id)
+}
+
+func (c *Client) threadResponse(method string, params map[string]any, id string) (Thread, error) {
+	raw, err := c.call(method, params)
 	if err != nil {
 		return Thread{}, err
 	}
@@ -137,10 +148,13 @@ func (c *Client) Read(id string) (Thread, error) {
 		Thread Thread `json:"thread"`
 	}
 	if err := json.Unmarshal(raw, &value); err != nil {
-		return Thread{}, fmt.Errorf("decode thread/read response: %w", err)
+		return Thread{}, fmt.Errorf("decode %s response: %w", method, err)
 	}
-	if value.Thread.ID != id {
-		return Thread{}, fmt.Errorf("thread/read returned ID %q, want %q", value.Thread.ID, id)
+	if value.Thread.ID == "" {
+		return Thread{}, fmt.Errorf("%s returned an empty thread ID", method)
+	}
+	if id != "" && value.Thread.ID != id {
+		return Thread{}, fmt.Errorf("%s returned ID %q, want %q", method, value.Thread.ID, id)
 	}
 	return value.Thread, nil
 }

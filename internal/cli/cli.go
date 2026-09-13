@@ -146,7 +146,7 @@ func (a *App) export(ctx context.Context, args []string) error {
 	if err != nil {
 		return err
 	}
-	version, err := requireSupportedCodex(codexBinary())
+	compatibility, err := requireSupportedCodex(codexBinary())
 	if err != nil {
 		return err
 	}
@@ -176,14 +176,14 @@ func (a *App) export(ctx context.Context, args []string) error {
 	if thread.Path == "" {
 		return fmt.Errorf("Codex did not report a rollout path for session %s", thread.ID)
 	}
-	rollout, meta, err := codex.StableRollout(thread.Path)
+	rollout, meta, err := compatibility.StableRollout(thread.Path)
 	if err != nil {
 		return fmt.Errorf("snapshot session %s: %w", thread.ID, err)
 	}
 	if meta.ID != thread.ID {
 		return fmt.Errorf("rollout session ID %s does not match selected thread %s", meta.ID, thread.ID)
 	}
-	manifest := bundle.NewManifest(codex.Provider, version, meta.ID, meta.CWD, a.Now())
+	manifest := bundle.NewManifest(codex.Provider, compatibility.Version, meta.ID, meta.CWD, a.Now())
 	output := options.output
 	if output == "" {
 		output = defaultArchiveName(thread)
@@ -229,12 +229,17 @@ func (a *App) inspect(args []string) error {
 	if err != nil {
 		return err
 	}
-	meta, err := codex.ValidateRollout(archive.Rollout)
-	if err != nil {
-		return fmt.Errorf("validate rollout: %w", err)
+	if archive.Manifest.Provider != codex.Provider {
+		return fmt.Errorf("unsupported provider %q", archive.Manifest.Provider)
 	}
-	if err := manifestMatches(archive.Manifest, meta); err != nil {
-		return err
+	if compatibility, compatibilityErr := codex.LookupCompatibility(archive.Manifest.ProviderVersion); compatibilityErr == nil {
+		meta, err := compatibility.ValidateRollout(archive.Rollout)
+		if err != nil {
+			return fmt.Errorf("validate rollout: %w", err)
+		}
+		if err := manifestMatches(archive.Manifest, meta); err != nil {
+			return err
+		}
 	}
 	if asJSON {
 		return writeJSON(a.Stdout, archive.Manifest)
@@ -280,22 +285,32 @@ func (a *App) importBundle(ctx context.Context, args []string) error {
 	if err != nil {
 		return err
 	}
-	sourceMeta, err := codex.ValidateRollout(archive.Rollout)
+	if archive.Manifest.Provider != codex.Provider {
+		return fmt.Errorf("unsupported provider %q", archive.Manifest.Provider)
+	}
+	sourceCompatibility, err := codex.LookupCompatibility(archive.Manifest.ProviderVersion)
+	if err != nil {
+		return err
+	}
+	sourceMeta, err := sourceCompatibility.ValidateRollout(archive.Rollout)
 	if err != nil {
 		return fmt.Errorf("validate rollout: %w", err)
 	}
 	if err := manifestMatches(archive.Manifest, sourceMeta); err != nil {
 		return err
 	}
-	if archive.Manifest.Provider != codex.Provider {
-		return fmt.Errorf("unsupported provider %q", archive.Manifest.Provider)
-	}
-	version, err := requireSupportedCodex(codexBinary())
+	targetCompatibility, err := requireSupportedCodex(codexBinary())
 	if err != nil {
 		return err
 	}
-	if archive.Manifest.ProviderVersion != version {
-		return fmt.Errorf("archive Codex version %s is incompatible with installed version %s", archive.Manifest.ProviderVersion, version)
+	if sourceCompatibility.Version != targetCompatibility.Version {
+		return fmt.Errorf("archive Codex version %s is incompatible with installed version %s", sourceCompatibility.Version, targetCompatibility.Version)
+	}
+	if !targetCompatibility.AppServer.ScanRepair || !targetCompatibility.AppServer.Read {
+		return fmt.Errorf("Codex %s lacks verified App Server import capabilities", targetCompatibility.Version)
+	}
+	if options.ifExists == collisionReplace && !targetCompatibility.AppServer.Delete {
+		return fmt.Errorf("Codex %s lacks a verified App Server delete capability required by replace", targetCompatibility.Version)
 	}
 	targetCWD := options.cwd
 	if options.preserveCWD {
@@ -313,7 +328,7 @@ func (a *App) importBundle(ctx context.Context, args []string) error {
 	rollout := archive.Rollout
 	meta := sourceMeta
 	if targetCWD != sourceMeta.CWD {
-		rollout, meta, err = codex.RemapWorkspace(archive.Rollout, targetCWD)
+		rollout, meta, err = targetCompatibility.RemapWorkspace(archive.Rollout, targetCWD)
 		if err != nil {
 			return fmt.Errorf("remap workspace: %w", err)
 		}
@@ -323,9 +338,9 @@ func (a *App) importBundle(ctx context.Context, args []string) error {
 	if err != nil {
 		return err
 	}
-	destination := codex.RolloutPath(home, meta)
+	destination := targetCompatibility.RolloutPath(home, meta)
 	if options.dryRun {
-		return a.dryRunImport(destination, meta, targetCWD, options.ifExists)
+		return a.dryRunImport(targetCompatibility, destination, meta, targetCWD, options.ifExists)
 	}
 	client, err := appserver.Start(ctx, codexBinary(), home)
 	if err != nil {
@@ -336,7 +351,7 @@ func (a *App) importBundle(ctx context.Context, args []string) error {
 	repair := func(repairMeta codex.SessionMeta) error {
 		return verifyRepair(client, repairMeta.ID, repairMeta.CWD)
 	}
-	if err := codex.RecoverReplacement(destination, meta.ID, reset, repair); err != nil {
+	if err := targetCompatibility.RecoverReplacement(destination, meta.ID, reset, repair); err != nil {
 		return err
 	}
 	threads, err := client.List("", false)
@@ -367,7 +382,7 @@ func (a *App) importBundle(ctx context.Context, args []string) error {
 		}
 	}
 	if existing != nil {
-		if err := codex.ReplaceRollout(destination, rollout, meta, reset, repair); err != nil {
+		if err := targetCompatibility.ReplaceRollout(destination, rollout, meta, reset, repair); err != nil {
 			return fmt.Errorf("replace session %s: %w", meta.ID, err)
 		}
 		if _, err := fmt.Fprintf(a.Stdout, "replaced %s in %s\nresume with: codex resume %s\n", meta.ID, targetCWD, meta.ID); err != nil {
@@ -391,7 +406,7 @@ func (a *App) importBundle(ctx context.Context, args []string) error {
 	return a.resumeIfRequested(ctx, options.resume, targetCWD, meta.ID)
 }
 
-func (a *App) dryRunImport(destination string, meta codex.SessionMeta, targetCWD string, policy collisionPolicy) error {
+func (a *App) dryRunImport(compatibility codex.Compatibility, destination string, meta codex.SessionMeta, targetCWD string, policy collisionPolicy) error {
 	pending, err := codex.ReplacementPending(destination)
 	if err != nil {
 		return fmt.Errorf("inspect replacement recovery state: %w", err)
@@ -399,7 +414,7 @@ func (a *App) dryRunImport(destination string, meta codex.SessionMeta, targetCWD
 	if pending {
 		return errors.New("an interrupted replacement requires recovery; rerun without --dry-run")
 	}
-	_, existingMeta, err := codex.StableRollout(destination)
+	_, existingMeta, err := compatibility.StableRollout(destination)
 	if errors.Is(err, os.ErrNotExist) {
 		_, writeErr := fmt.Fprintf(a.Stdout, "import valid: %s -> %s\n", meta.ID, targetCWD)
 		return writeErr
@@ -456,13 +471,26 @@ func (a *App) doctor(ctx context.Context, args []string) error {
 	}
 	version, versionErr := codex.Version(codexBinary())
 	report := struct {
-		CodexHome      string `json:"codex_home"`
-		CodexVersion   string `json:"codex_version,omitempty"`
-		Supported      bool   `json:"supported"`
-		AppServer      bool   `json:"app_server"`
-		AppServerError string `json:"app_server_error,omitempty"`
-		DetectionError string `json:"detection_error,omitempty"`
-	}{CodexHome: home, CodexVersion: version, Supported: versionErr == nil && codex.SupportsRemap(version)}
+		CodexHome             string                      `json:"codex_home"`
+		CodexVersion          string                      `json:"codex_version,omitempty"`
+		Supported             bool                        `json:"supported"`
+		SupportedVersions     []string                    `json:"supported_versions"`
+		LayoutFingerprint     string                      `json:"layout_fingerprint,omitempty"`
+		RolloutFilenameLayout string                      `json:"rollout_filename_layout,omitempty"`
+		Capabilities          codex.AppServerCapabilities `json:"app_server_capabilities"`
+		AppServer             bool                        `json:"app_server"`
+		AppServerError        string                      `json:"app_server_error,omitempty"`
+		DetectionError        string                      `json:"detection_error,omitempty"`
+	}{CodexHome: home, CodexVersion: version, SupportedVersions: codex.SupportedVersions()}
+	if versionErr == nil {
+		compatibility, compatibilityErr := codex.LookupCompatibility(version)
+		if compatibilityErr == nil {
+			report.Supported = true
+			report.LayoutFingerprint = compatibility.LayoutFingerprint
+			report.RolloutFilenameLayout = compatibility.RolloutFilenameLayout
+			report.Capabilities = compatibility.AppServer
+		}
+	}
 	if versionErr != nil {
 		report.DetectionError = versionErr.Error()
 	} else {
@@ -479,7 +507,11 @@ func (a *App) doctor(ctx context.Context, args []string) error {
 	if asJSON {
 		return writeJSON(a.Stdout, report)
 	}
-	_, err = fmt.Fprintf(a.Stdout, "Codex home: %s\nCodex version: %s\nSupported: %t\nApp Server: %t\n", home, version, report.Supported, report.AppServer)
+	_, err = fmt.Fprintf(
+		a.Stdout,
+		"Codex home: %s\nCodex version: %s\nSupported: %t\nLayout: %s\nApp Server: %t\n",
+		home, version, report.Supported, report.LayoutFingerprint, report.AppServer,
+	)
 	if err != nil {
 		return err
 	}
@@ -617,15 +649,12 @@ func codexBinary() string {
 	return "codex"
 }
 
-func requireSupportedCodex(path string) (string, error) {
+func requireSupportedCodex(path string) (codex.Compatibility, error) {
 	version, err := codex.Version(path)
 	if err != nil {
-		return "", err
+		return codex.Compatibility{}, err
 	}
-	if !codex.SupportsRemap(version) {
-		return "", fmt.Errorf("Codex %s is unsupported; cxport currently supports 0.154.0", version)
-	}
-	return version, nil
+	return codex.LookupCompatibility(version)
 }
 
 func selectThread(threads []appserver.Thread, selector string, last bool) (appserver.Thread, error) {

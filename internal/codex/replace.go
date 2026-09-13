@@ -42,7 +42,7 @@ func ReplacementPending(destination string) (bool, error) {
 	return false, nil
 }
 
-func RecoverReplacement(destination, sessionID string, reset resetThreadFunc, repair repairThreadFunc) error {
+func (c Compatibility) RecoverReplacement(destination, sessionID string, reset resetThreadFunc, repair repairThreadFunc) error {
 	rollback := rollbackPath(destination)
 	if _, err := os.Stat(rollback); errors.Is(err, os.ErrNotExist) {
 		if err := removeIfExists(stagePath(destination)); err != nil {
@@ -52,20 +52,20 @@ func RecoverReplacement(destination, sessionID string, reset resetThreadFunc, re
 	} else if err != nil {
 		return fmt.Errorf("inspect replacement rollback: %w", err)
 	}
-	return restoreRollback(destination, sessionID, reset, repair)
+	return c.restoreRollback(destination, sessionID, reset, repair)
 }
 
-func ReplaceRollout(
+func (c Compatibility) ReplaceRollout(
 	destination string,
 	replacement []byte,
 	meta SessionMeta,
 	reset resetThreadFunc,
 	repair repairThreadFunc,
 ) error {
-	return replaceRollout(destination, replacement, meta, reset, repair, nil)
+	return c.replaceRollout(destination, replacement, meta, reset, repair, nil)
 }
 
-func replaceRollout(
+func (c Compatibility) replaceRollout(
 	destination string,
 	replacement []byte,
 	meta SessionMeta,
@@ -73,17 +73,17 @@ func replaceRollout(
 	repair repairThreadFunc,
 	checkpoint checkpointFunc,
 ) error {
-	if err := RecoverReplacement(destination, meta.ID, reset, repair); err != nil {
+	if err := c.RecoverReplacement(destination, meta.ID, reset, repair); err != nil {
 		return fmt.Errorf("recover interrupted replacement: %w", err)
 	}
-	_, oldMeta, err := StableRollout(destination)
+	_, oldMeta, err := c.StableRollout(destination)
 	if err != nil {
 		return fmt.Errorf("validate existing rollout: %w", err)
 	}
 	if oldMeta.ID != meta.ID {
 		return fmt.Errorf("existing rollout has session ID %s, want %s", oldMeta.ID, meta.ID)
 	}
-	replacementMeta, err := ValidateRollout(replacement)
+	replacementMeta, err := c.ValidateRollout(replacement)
 	if err != nil {
 		return fmt.Errorf("validate replacement rollout: %w", err)
 	}
@@ -106,14 +106,14 @@ func replaceRollout(
 		return fmt.Errorf("create replacement rollback link: %w", err)
 	}
 	if err := syncDirectory(filepath.Dir(destination)); err != nil {
-		return rollbackAfterError(destination, meta.ID, reset, repair, fmt.Errorf("sync replacement rollback: %w", err))
+		return c.rollbackAfterError(destination, meta.ID, reset, repair, fmt.Errorf("sync replacement rollback: %w", err))
 	}
 	if err := runCheckpoint(checkpoint, phaseBackedUp); err != nil {
 		return err
 	}
 
 	if err := reset(); err != nil {
-		return rollbackAfterError(destination, meta.ID, reset, repair, fmt.Errorf("delete existing Codex thread: %w", err))
+		return c.rollbackAfterError(destination, meta.ID, reset, repair, fmt.Errorf("delete existing Codex thread: %w", err))
 	}
 	if _, err := os.Stat(destination); !errors.Is(err, os.ErrNotExist) {
 		if err == nil {
@@ -121,25 +121,25 @@ func replaceRollout(
 		} else {
 			err = fmt.Errorf("inspect deleted rollout: %w", err)
 		}
-		return rollbackAfterError(destination, meta.ID, reset, repair, err)
+		return c.rollbackAfterError(destination, meta.ID, reset, repair, err)
 	}
 	if err := runCheckpoint(checkpoint, phaseStateReset); err != nil {
 		return err
 	}
 
 	if err := os.Rename(stage, destination); err != nil {
-		return rollbackAfterError(destination, meta.ID, reset, repair, fmt.Errorf("place replacement rollout: %w", err))
+		return c.rollbackAfterError(destination, meta.ID, reset, repair, fmt.Errorf("place replacement rollout: %w", err))
 	}
 	stageCommitted = true
 	if err := syncDirectory(filepath.Dir(destination)); err != nil {
-		return rollbackAfterError(destination, meta.ID, reset, repair, fmt.Errorf("sync replacement rollout: %w", err))
+		return c.rollbackAfterError(destination, meta.ID, reset, repair, fmt.Errorf("sync replacement rollout: %w", err))
 	}
 	if err := runCheckpoint(checkpoint, phaseNewPlaced); err != nil {
 		return err
 	}
 
 	if err := repair(meta); err != nil {
-		return rollbackAfterError(destination, meta.ID, reset, repair, fmt.Errorf("repair replacement thread: %w", err))
+		return c.rollbackAfterError(destination, meta.ID, reset, repair, fmt.Errorf("repair replacement thread: %w", err))
 	}
 	if err := runCheckpoint(checkpoint, phaseNewVerified); err != nil {
 		return err
@@ -153,21 +153,21 @@ func replaceRollout(
 	return nil
 }
 
-func rollbackAfterError(
+func (c Compatibility) rollbackAfterError(
 	destination, sessionID string,
 	reset resetThreadFunc,
 	repair repairThreadFunc,
 	cause error,
 ) error {
-	if err := restoreRollback(destination, sessionID, reset, repair); err != nil {
+	if err := c.restoreRollback(destination, sessionID, reset, repair); err != nil {
 		return fmt.Errorf("%w; rollback failed: %v", cause, err)
 	}
 	return cause
 }
 
-func restoreRollback(destination, sessionID string, reset resetThreadFunc, repair repairThreadFunc) error {
+func (c Compatibility) restoreRollback(destination, sessionID string, reset resetThreadFunc, repair repairThreadFunc) error {
 	rollback := rollbackPath(destination)
-	_, oldMeta, err := StableRollout(rollback)
+	_, oldMeta, err := c.StableRollout(rollback)
 	if err != nil {
 		return fmt.Errorf("validate rollback rollout: %w", err)
 	}
