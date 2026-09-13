@@ -92,3 +92,13 @@ Chronological implementation detail belongs in `sessions/`.
 - `impact`: The initial adapter stays rollout-only and version-gated. Workspace
   remapping covers known metadata events but does not rewrite recorded tool results.
 - `evidence`: `spikes/app-server-repair`, `ARCHITECTURE.md`.
+
+### 2026-09-13 - Export only completed-turn snapshots
+
+- `decision`: For Codex 0.154.0, require a stable rollout read whose final event is
+  `event_msg/task_complete`.
+- `rationale`: A separate App Server reports sessions owned by another CLI process as
+  unloaded, so runtime status alone cannot prove that a turn is complete.
+- `impact`: Export fails closed during an active turn. The archive always ends at a
+  replayable turn boundary, even when the source CLI remains open.
+- `evidence`: `internal/codex`, `internal/codex/codex_test.go`.

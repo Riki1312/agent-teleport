@@ -27,22 +27,25 @@
 
 ## Next work
 
-1. Turn the spike's event classification into sanitized fixtures and adapter tests.
-2. Define the import commit, collision, and rollback protocol with fault injection.
-3. Build the smallest production skeleton around App Server discovery and archive
-   inspection.
+1. Convert the manual isolated-home transfer into a repeatable E2E test without
+   committing session contents.
+2. Define and fault-test the collision replacement and rollback protocol.
+3. Add the Bubble Tea picker over the working non-interactive export path.
 
 ## Open questions
 
 - Which additional Codex versions and rollout layouts pass the repair probe?
-- What is the smallest reliable quiescence check for export?
+- How should supported Codex versions be expanded without overfitting one rollout?
 
 ## Repository state
 
 - Architecture and repository conventions are documented.
 - The Go module targets Go 1.25 or newer.
-- No production packages or dependencies have been added yet.
+- The dependency-free production CLI implements `list`, `export`, `inspect`, `import`,
+  and `doctor` for Codex 0.154.0.
 - The Codex 0.154.0 spike proves rollout-only App Server repair, read, resume, and
   restart persistence in an isolated target home.
 - Workspace remapping must cover authoritative workspace metadata throughout the
   rollout; changing only `session_meta.payload.cwd` is insufficient.
+- Export accepts only stable rollouts ending in `task_complete`; active turns fail
+  closed.

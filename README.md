@@ -11,9 +11,23 @@ a different workspace and resumed through the native agent CLI.
 cxport export --last -o - | ssh workstation cxport import -
 ```
 
-The project is in its architecture and compatibility-spike phase. See
-[`ARCHITECTURE.md`](ARCHITECTURE.md) for the intended command interface, archive
-format, fidelity model, and safety boundaries.
+The dependency-free CLI core is under active development. It can list, export,
+inspect, and import Codex 0.154.0 sessions, including direct stdin/stdout transfer.
+See [`ARCHITECTURE.md`](ARCHITECTURE.md) for the command interface, archive format,
+fidelity model, and safety boundaries.
+
+```sh
+go build ./cmd/cxport
+./cxport doctor
+./cxport list
+./cxport export --last
+./cxport inspect ./session.cxport
+./cxport import ./session.cxport
+```
+
+The interactive picker and collision replacement are intentionally deferred. Until
+the picker lands, pass a session ID or `--last` to `export`. Existing sessions fail
+closed by default and may only be skipped explicitly.
 
 ## Initial scope
 

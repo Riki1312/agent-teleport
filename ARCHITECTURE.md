@@ -217,9 +217,11 @@ The adapter performs these steps:
 
 1. Locate the active Codex home and supported state store.
 2. Discover candidate sessions and resolve the requested selector.
-3. Use Codex App Server status when available to verify that the chosen session is
-   quiescent and internally consistent.
-4. Read a consistent snapshot of its rollout.
+3. Reject an active App Server status, then independently require the rollout to end
+   in the version-specific completed-turn event. App Server status alone is not a
+   cross-process activity lock.
+4. Read a consistent snapshot and verify that its size and modification time did not
+   change during the read.
 5. Validate its session identity and metadata.
 6. Build the archive in a private temporary location.
 7. Verify the completed archive and atomically rename it to the output path.
