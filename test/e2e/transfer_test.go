@@ -25,6 +25,10 @@ func TestTwoHomeTransfer(t *testing.T) {
 	sourceCWD := mkdir(t, filepath.Join(work, "source-workspace"))
 	targetHome := mkdir(t, filepath.Join(work, "target-home"))
 	targetCWD := mkdir(t, filepath.Join(work, "target-workspace"))
+	targetAlias := filepath.Join(work, "target-alias")
+	if err := os.Symlink(targetCWD, targetAlias); err != nil {
+		t.Fatal(err)
+	}
 	replacementCWD := mkdir(t, filepath.Join(work, "replacement-workspace"))
 	pipeHome := mkdir(t, filepath.Join(work, "pipe-home"))
 	pipeCWD := mkdir(t, filepath.Join(work, "pipe-workspace"))
@@ -51,7 +55,7 @@ func TestTwoHomeTransfer(t *testing.T) {
 	run(t, binary, codexPath, sourceHome, nil, true, "inspect", archivePath, "--json")
 
 	run(t, binary, codexPath, targetHome, nil, true,
-		"import", archivePath, "--cwd", targetCWD)
+		"import", archivePath, "--cwd", targetAlias)
 	assertListedCWD(t, run(t, binary, codexPath, targetHome, nil, true,
 		"list", "--all", "--json"), fixture.Meta.ID, targetCWD)
 	run(t, binary, codexPath, targetHome, nil, false,
@@ -169,10 +173,15 @@ func moduleRoot(t *testing.T) string {
 
 func testWorkDir(t *testing.T) string {
 	t.Helper()
+	path := t.TempDir()
 	if value := os.Getenv("CXPORT_E2E_WORKDIR"); value != "" {
-		return mkdir(t, value)
+		path = mkdir(t, value)
 	}
-	return t.TempDir()
+	resolved, err := filepath.EvalSymlinks(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return resolved
 }
 
 func mkdir(t *testing.T, path string) string {

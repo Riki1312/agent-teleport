@@ -315,16 +315,14 @@ func (a *App) importBundle(ctx context.Context, args []string) error {
 	targetCWD := options.cwd
 	if options.preserveCWD {
 		targetCWD = archive.Manifest.OriginalCWD
-	}
-	if targetCWD == "" {
+	} else if targetCWD == "" {
 		targetCWD, err = currentWorkspace()
 	} else {
-		targetCWD, err = filepath.Abs(targetCWD)
+		targetCWD, err = canonicalWorkspace(targetCWD)
 	}
 	if err != nil {
 		return fmt.Errorf("resolve target workspace: %w", err)
 	}
-	targetCWD = filepath.Clean(targetCWD)
 	rollout := archive.Rollout
 	meta := sourceMeta
 	if targetCWD != sourceMeta.CWD {
@@ -635,11 +633,7 @@ func currentWorkspace() (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("resolve current workspace: %w", err)
 	}
-	resolved, err := filepath.EvalSymlinks(cwd)
-	if err == nil {
-		cwd = resolved
-	}
-	return filepath.Clean(cwd), nil
+	return canonicalWorkspace(cwd)
 }
 
 func codexBinary() string {
@@ -932,7 +926,7 @@ func verifyRepair(client *appserver.Client, id, cwd string) error {
 		return err
 	}
 	if thread.CWD != cwd || stateThread.CWD != cwd || readThread.CWD != cwd {
-		return fmt.Errorf("repaired workspace does not match target %s", cwd)
+		return fmt.Errorf("repaired workspace does not match target %q (scan %q, state %q, read %q)", cwd, thread.CWD, stateThread.CWD, readThread.CWD)
 	}
 	return nil
 }
