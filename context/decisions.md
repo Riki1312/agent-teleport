@@ -128,3 +128,40 @@ Chronological implementation detail belongs in `sessions/`.
   and a fixture proven against that exact Codex CLI.
 - `evidence`: `internal/codex/compatibility.go`, `test/e2e/transfer_test.go`,
   `testdata/codex`.
+
+### 2026-11-07 - Reject external replay dependencies in single-file archives
+
+- `decision`: Reject any non-null `session_meta.payload.history_base` in the version
+  1 Codex rollout validator. Do not enable newer CLI versions through the version
+  table until complete replay dependencies are implemented and tested.
+- `rationale`: Some paginated histories, including ones written by the previously
+  supported CLI, depend on other physical rollout files. A single-file archive can
+  otherwise appear valid while omitting most of the conversation.
+- `impact`: Standalone histories and explicit null references remain supported;
+  shared histories fail with an actionable dependency error. Divergent `id` and
+  `session_id` fields also fail closed: multi-agent v2 can use them for different
+  thread and parent-session identities.
+- `evidence`: `internal/codex/codex.go`, `internal/codex/codex_test.go`.
+
+### 2026-11-07 - Canonicalize explicit destination workspaces
+
+- `decision`: Resolve workspace symlinks before import, including symlinks in the
+  existing ancestor of a not-yet-created directory. Reject broken links and
+  non-directory ancestors without creating the target directory.
+- `rationale`: macOS temporary paths can have both `/var` and `/private/var` forms;
+  native Codex canonicalizes them, which previously broke import verification.
+- `impact`: Default and explicit workspaces use the same canonical path behavior.
+- `evidence`: `internal/cli/workspace.go`, `internal/cli/workspace_test.go`, and the
+  required native Codex 0.154.0 two-home E2E.
+
+### 2026-11-08 - Publish production fixes separately from migration prototypes
+
+- `decision`: Publish the version 1 validation and workspace fixes with their tests.
+  Keep migration-specific scripts and experimental App Server probe changes outside
+  the production release; retain general findings in the project context.
+- `rationale`: A successful transfer of selected histories between known machines
+  does not establish a reusable archive contract or broad provider compatibility.
+- `impact`: Codex support remains gated to 0.154.0. Modern replay graphs and a Claude
+  adapter need their own design and portable, sanitized end-to-end coverage.
+- `evidence`: `context/current.md`, `internal/codex/codex_test.go`,
+  `internal/cli/workspace_test.go`, and `test/e2e/transfer_test.go`.
