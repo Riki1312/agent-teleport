@@ -62,6 +62,87 @@ func TestValidateRolloutRejectsUnsafeSessionID(t *testing.T) {
 	}
 }
 
+func TestValidateRolloutHistoryBase(t *testing.T) {
+	for _, test := range []struct {
+		name      string
+		base      any
+		wantError bool
+	}{
+		{name: "external file prefix", base: map[string]any{
+			"thread_id":             "01999999-3333-7777-8888-444444444444",
+			"end_ordinal_exclusive": 5,
+			"end_byte_offset":       1024,
+		}, wantError: true},
+		{name: "null base", base: nil},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			first, rest, _ := bytes.Cut(fixtureRollout("/source/workspace"), []byte{'\n'})
+			var event map[string]any
+			if err := json.Unmarshal(first, &event); err != nil {
+				t.Fatal(err)
+			}
+			event["payload"].(map[string]any)["history_base"] = test.base
+			header, err := json.Marshal(event)
+			if err != nil {
+				t.Fatal(err)
+			}
+			source := append(append(header, '\n'), rest...)
+			_, err = testCompatibility.ValidateRollout(source)
+			if test.wantError {
+				if err == nil || !strings.Contains(err.Error(), "history_base") {
+					t.Fatalf("ValidateRollout must reject an incomplete single-file archive, got %v", err)
+				}
+			} else if err != nil {
+				t.Fatalf("explicit null history base must remain supported: %v", err)
+			}
+		})
+	}
+}
+
+func TestValidateRolloutThreadAndSessionIDs(t *testing.T) {
+	for _, test := range []struct {
+		name      string
+		threadID  string
+		sessionID string
+		wantError bool
+	}{
+		{name: "thread ID only", threadID: testSessionID},
+		{name: "legacy session ID only", sessionID: testSessionID},
+		{name: "matching IDs", threadID: testSessionID, sessionID: testSessionID},
+		{name: "different IDs", threadID: testSessionID,
+			sessionID: "01999999-3333-7777-8888-444444444444", wantError: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			first, rest, _ := bytes.Cut(fixtureRollout("/source/workspace"), []byte{'\n'})
+			var event map[string]any
+			if err := json.Unmarshal(first, &event); err != nil {
+				t.Fatal(err)
+			}
+			payload := event["payload"].(map[string]any)
+			delete(payload, "id")
+			if test.threadID != "" {
+				payload["id"] = test.threadID
+			}
+			if test.sessionID != "" {
+				payload["session_id"] = test.sessionID
+			}
+			header, err := json.Marshal(event)
+			if err != nil {
+				t.Fatal(err)
+			}
+			source := append(append(header, '\n'), rest...)
+			meta, err := testCompatibility.ValidateRollout(source)
+			if test.wantError {
+				if err == nil || !strings.Contains(err.Error(), "different thread and session IDs") {
+					t.Fatalf("ambiguous thread identity must fail closed, got %v", err)
+				}
+			} else if err != nil || meta.ID != testSessionID {
+				t.Fatalf("ValidateRollout() = %#v, %v; want session %s", meta, err, testSessionID)
+			}
+		})
+	}
+}
+
 func TestRolloutPath(t *testing.T) {
 	meta := SessionMeta{
 		ID:        testSessionID,

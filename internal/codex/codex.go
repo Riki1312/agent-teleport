@@ -80,10 +80,11 @@ func (c Compatibility) ValidateRollout(data []byte) (SessionMeta, error) {
 	var first struct {
 		Type    string `json:"type"`
 		Payload struct {
-			ID        string `json:"id"`
-			SessionID string `json:"session_id"`
-			CWD       string `json:"cwd"`
-			Timestamp string `json:"timestamp"`
+			ID          string          `json:"id"`
+			SessionID   string          `json:"session_id"`
+			CWD         string          `json:"cwd"`
+			Timestamp   string          `json:"timestamp"`
+			HistoryBase json.RawMessage `json:"history_base"`
 		} `json:"payload"`
 	}
 	if err := json.Unmarshal(lines[0], &first); err != nil {
@@ -91,6 +92,12 @@ func (c Compatibility) ValidateRollout(data []byte) (SessionMeta, error) {
 	}
 	if first.Type != "session_meta" {
 		return SessionMeta{}, fmt.Errorf("first rollout event has type %q, want session_meta", first.Type)
+	}
+	if len(first.Payload.HistoryBase) != 0 && !bytes.Equal(bytes.TrimSpace(first.Payload.HistoryBase), []byte("null")) {
+		return SessionMeta{}, errors.New("rollout references an external history_base; single-file archives cannot preserve its dependencies")
+	}
+	if first.Payload.ID != "" && first.Payload.SessionID != "" && first.Payload.ID != first.Payload.SessionID {
+		return SessionMeta{}, errors.New("rollout has different thread and session IDs; this layout is not supported")
 	}
 	id := first.Payload.SessionID
 	if id == "" {

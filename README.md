@@ -29,6 +29,10 @@ The interactive picker is intentionally deferred. Until it lands, pass a session
 or `--last` to `export`. Existing sessions fail closed by default; import supports
 explicit `skip` and recoverable `replace` policies.
 
+Support is limited to self-contained Codex 0.154.0 rollouts. Histories with external
+`history_base` dependencies or different thread and session IDs are rejected before
+transfer. Newer Codex versions and Claude Code are not supported yet.
+
 ## Initial scope
 
 - OpenAI Codex through the `cxport` binary
