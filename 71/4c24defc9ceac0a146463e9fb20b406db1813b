@@ -1,0 +1,60 @@
+internal/codex/import.go
+  s_b3feabb7857cd3::t_3b85b04da66bbe 603,617
+  s_b3feabb7857cd3::t_dd403fe573c7d2 13
+  s_b3feabb7857cd3::t_970124acda2b31 14,24,27,32,35,40,43,48,140,156,165,167-168,179,215,259,264,267,275,284
+internal/codex/layout.go
+  s_b3feabb7857cd3::t_cb004c96e0212d 7-8,63,65,69-70
+internal/codex/codex.go
+  s_b3feabb7857cd3::t_7bf2e8ec13bed3 12,22,28-43,92,103,114,119-124,130-138,141,145,147,153-156,158-159,161-164,166,169-170,177,197-202,206-207,218-220,286-288
+internal/codex/append.go
+  s_b3feabb7857cd3::t_3b85b04da66bbe 10-11,37,40,60,104
+internal/pathmap/pathmap.go
+  s_b3feabb7857cd3::t_1444358dfceab2 1-272
+internal/cli/cli.go
+  s_b3feabb7857cd3::t_1ac94afad77c1a 29
+  s_b3feabb7857cd3::t_81f6866226fbfa 14-16,25,28,30,85,107,111-112,120,143,176,180-181,187,192,196,205,215,237-241,245,269,274,279,304-308,313,317,323-324,338,343,346-351,354-366,371-379,394-410,415-427,429,432,437,486-525,533-546,549-566,569,573,580,583,588-606,650
+internal/cli/help.go
+  s_b3feabb7857cd3::t_19ccedc745ec95 38-40,61-62
+internal/archive/archive.go
+  s_b3feabb7857cd3::t_7bf2e8ec13bed3 44-54,71,98,282-283
+internal/codex/replace.go
+  s_b3feabb7857cd3::t_3b85b04da66bbe 50,97,109,135,151,181,187,196,199,224
+  s_b3feabb7857cd3::t_dd403fe573c7d2 11
+internal/fsutil/fsutil.go
+  s_b3feabb7857cd3::t_3b85b04da66bbe 1-92
+internal/archive/archive_test.go
+  s_b3feabb7857cd3::t_b2a679bdd372a3 141
+internal/pathmap/pathmap_test.go
+  s_b3feabb7857cd3::t_aa0f20ac7107dc 1-131
+internal/fsutil/fsutil_test.go
+  s_b3feabb7857cd3::t_83ed26eb5ce08f 1-42
+test/e2e/transfer_test.go
+  s_b3feabb7857cd3::t_23e258866f32be 246,341
+  s_b3feabb7857cd3::t_1ac94afad77c1a 504,519
+  s_b3feabb7857cd3::t_957de11f3ef04a 395-412,414,419-422,424-425,506-515,517-518,520,524
+internal/codex/rollout.go
+  s_b3feabb7857cd3::t_3b85b04da66bbe 13,39
+  s_b3feabb7857cd3::t_5d259dfa1fc5d5 12,14,195-197,212-214
+internal/semver/semver_test.go
+  s_b3feabb7857cd3::t_83ed26eb5ce08f 1-27
+internal/semver/semver.go
+  s_b3feabb7857cd3::t_e5ccc8dc730a0b 1-63
+internal/provider/provider.go
+  s_b3feabb7857cd3::t_08788a019e32ef 1-115
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.2",
+  "base_commit_sha": "714c24defc9ceac0a146463e9fb20b406db1813b",
+  "prompts": {},
+  "sessions": {
+    "s_b3feabb7857cd3": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "fd1b6ebe-1b52-4a20-8b44-740169df5be6",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Riccardo <riki.brero@gmail.com>"
+    }
+  }
+}
