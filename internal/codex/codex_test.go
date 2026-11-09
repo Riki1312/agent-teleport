@@ -3,7 +3,9 @@ package codex
 import (
 	"bytes"
 	"encoding/json"
+	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -151,6 +153,46 @@ func TestRolloutPath(t *testing.T) {
 	want := filepath.Join("/codex", "sessions", "2026", "09", "13", "rollout-2026-09-13T09-58-44-"+testSessionID+".jsonl")
 	if got := testCompatibility.RolloutPath("/codex", meta); got != want {
 		t.Fatalf("RolloutPath() = %q, want %q", got, want)
+	}
+}
+
+func TestExistingRolloutsIncludesArchivedSessions(t *testing.T) {
+	home := t.TempDir()
+	name := "rollout-2026-09-13T09-58-44-" + testSessionID + ".jsonl"
+	active := filepath.Join(home, "sessions", "2026", "09", "13", name)
+	archived := filepath.Join(home, "archived_sessions", name)
+	unrelated := filepath.Join(home, "sessions", "2026", "09", "13", "rollout-2026-09-13T09-58-44-01999999-3333-7777-8888-444444444444.jsonl")
+	for _, path := range []string{active, archived, unrelated, active + ".cxport-rollback"} {
+		if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, nil, 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	// when
+	paths, err := ExistingRollouts(home, testSessionID)
+
+	// then
+	if err != nil {
+		t.Fatal(err)
+	}
+	slices.Sort(paths)
+	want := []string{archived, active}
+	slices.Sort(want)
+	if !slices.Equal(paths, want) {
+		t.Fatalf("ExistingRollouts() = %q, want %q", paths, want)
+	}
+}
+
+func TestExistingRolloutsWithoutSessionStores(t *testing.T) {
+	// when
+	paths, err := ExistingRollouts(t.TempDir(), testSessionID)
+
+	// then
+	if err != nil || len(paths) != 0 {
+		t.Fatalf("ExistingRollouts() = %q, %v", paths, err)
 	}
 }
 

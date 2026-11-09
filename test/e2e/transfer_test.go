@@ -83,6 +83,18 @@ func TestTwoHomeTransfer(t *testing.T) {
 	assertListedCWD(t, run(t, binary, codexPath, pipeHome, nil, true,
 		"list", "--all", "--json"), fixture.Meta.ID, pipeCWD)
 
+	archiveSession(t, codexPath, pipeHome, fixture.Meta.ID)
+	archived := filepath.Join(pipeHome, "archived_sessions", filepath.Base(destination))
+	run(t, binary, codexPath, pipeHome, nil, false,
+		"import", archivePath, "--cwd", pipeCWD)
+	run(t, binary, codexPath, pipeHome, nil, false,
+		"import", archivePath, "--cwd", pipeCWD, "--if-exists", "replace")
+	run(t, binary, codexPath, pipeHome, nil, true,
+		"import", archivePath, "--cwd", pipeCWD, "--if-exists", "skip")
+	if _, err := os.Stat(archived); err != nil {
+		t.Fatalf("import changed an archived session: %v", err)
+	}
+
 	client, err := appserver.Start(context.Background(), codexPath, targetHome)
 	if err != nil {
 		t.Fatal(err)
@@ -94,6 +106,18 @@ func TestTwoHomeTransfer(t *testing.T) {
 	}
 	if resumed.CWD != replacementCWD {
 		t.Fatalf("resumed cwd = %q, want %q", resumed.CWD, replacementCWD)
+	}
+}
+
+func archiveSession(t *testing.T, codexPath, home, sessionID string) {
+	t.Helper()
+	client, err := appserver.Start(context.Background(), codexPath, home)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer client.Close()
+	if err := client.Archive(sessionID); err != nil {
+		t.Fatalf("archive session: %v", err)
 	}
 }
 

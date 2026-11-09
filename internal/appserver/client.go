@@ -164,6 +164,11 @@ func (c *Client) Delete(id string) error {
 	return err
 }
 
+func (c *Client) Archive(id string) error {
+	_, err := c.call("thread/archive", map[string]any{"threadId": id})
+	return err
+}
+
 func (c *Client) initialize() error {
 	_, err := c.call("initialize", map[string]any{
 		"clientInfo": map[string]string{

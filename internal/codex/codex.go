@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -203,6 +204,32 @@ func (c Compatibility) RolloutPath(home string, meta SessionMeta) string {
 		timestamp.Format("02"),
 		name,
 	)
+}
+
+// ExistingRollouts returns every active or archived rollout file for sessionID.
+// Codex lists only active threads, so collision checks must inspect both stores.
+func ExistingRollouts(home, sessionID string) ([]string, error) {
+	suffix := "-" + sessionID + ".jsonl"
+	var paths []string
+	for _, root := range []string{filepath.Join(home, "sessions"), filepath.Join(home, "archived_sessions")} {
+		err := filepath.WalkDir(root, func(path string, entry fs.DirEntry, err error) error {
+			if err != nil {
+				if path == root && errors.Is(err, fs.ErrNotExist) {
+					return nil
+				}
+				return err
+			}
+			name := entry.Name()
+			if !entry.IsDir() && strings.HasPrefix(name, "rollout-") && strings.HasSuffix(name, suffix) {
+				paths = append(paths, path)
+			}
+			return nil
+		})
+		if err != nil {
+			return nil, fmt.Errorf("search existing rollouts: %w", err)
+		}
+	}
+	return paths, nil
 }
 
 func remapCWDValues(value any, sourceCWD, targetCWD string) int {

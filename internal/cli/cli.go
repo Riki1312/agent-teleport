@@ -338,7 +338,7 @@ func (a *App) importBundle(ctx context.Context, args []string) error {
 	}
 	destination := targetCompatibility.RolloutPath(home, meta)
 	if options.dryRun {
-		return a.dryRunImport(targetCompatibility, destination, meta, targetCWD, options.ifExists)
+		return a.dryRunImport(home, destination, meta, targetCWD, options.ifExists)
 	}
 	client, err := appserver.Start(ctx, codexBinary(), home)
 	if err != nil {
@@ -352,12 +352,11 @@ func (a *App) importBundle(ctx context.Context, args []string) error {
 	if err := targetCompatibility.RecoverReplacement(destination, meta.ID, reset, repair); err != nil {
 		return err
 	}
-	threads, err := client.List("", false)
+	existing, err := codex.ExistingRollouts(home, meta.ID)
 	if err != nil {
-		return fmt.Errorf("check existing sessions: %w", err)
+		return err
 	}
-	existing := findThread(threads, meta.ID)
-	if existing != nil {
+	if len(existing) > 0 {
 		if options.ifExists == collisionSkip {
 			_, err := fmt.Fprintf(a.Stdout, "session %s already exists; skipped\n", meta.ID)
 			return err
@@ -365,21 +364,20 @@ func (a *App) importBundle(ctx context.Context, args []string) error {
 		if options.ifExists == collisionError {
 			return fmt.Errorf("session %s already exists", meta.ID)
 		}
-		if existing.Status.Type != "idle" && existing.Status.Type != "notLoaded" {
-			return fmt.Errorf("existing session %s is not quiescent (status %q)", meta.ID, existing.Status.Type)
+		if err := requireReplaceable(existing, destination, meta.ID); err != nil {
+			return err
 		}
-		if existing.Path == "" || filepath.Clean(existing.Path) != filepath.Clean(destination) {
-			return fmt.Errorf("existing session path %q does not match expected path %q", existing.Path, destination)
+		threads, err := client.List("", false)
+		if err != nil {
+			return fmt.Errorf("check existing session: %w", err)
 		}
-	}
-	if existing == nil {
-		if _, err := os.Stat(destination); err == nil {
-			return fmt.Errorf("rollout destination already exists: %s", destination)
-		} else if !errors.Is(err, os.ErrNotExist) {
-			return fmt.Errorf("check rollout destination: %w", err)
+		thread := findThread(threads, meta.ID)
+		if thread == nil {
+			return fmt.Errorf("Codex does not list existing session %s", meta.ID)
 		}
-	}
-	if existing != nil {
+		if thread.Status.Type != "idle" && thread.Status.Type != "notLoaded" {
+			return fmt.Errorf("existing session %s is not quiescent (status %q)", meta.ID, thread.Status.Type)
+		}
 		if err := targetCompatibility.ReplaceRollout(destination, rollout, meta, reset, repair); err != nil {
 			return fmt.Errorf("replace session %s: %w", meta.ID, err)
 		}
@@ -404,7 +402,7 @@ func (a *App) importBundle(ctx context.Context, args []string) error {
 	return a.resumeIfRequested(ctx, options.resume, targetCWD, meta.ID)
 }
 
-func (a *App) dryRunImport(compatibility codex.Compatibility, destination string, meta codex.SessionMeta, targetCWD string, policy collisionPolicy) error {
+func (a *App) dryRunImport(home, destination string, meta codex.SessionMeta, targetCWD string, policy collisionPolicy) error {
 	pending, err := codex.ReplacementPending(destination)
 	if err != nil {
 		return fmt.Errorf("inspect replacement recovery state: %w", err)
@@ -412,27 +410,36 @@ func (a *App) dryRunImport(compatibility codex.Compatibility, destination string
 	if pending {
 		return errors.New("an interrupted replacement requires recovery; rerun without --dry-run")
 	}
-	_, existingMeta, err := compatibility.StableRollout(destination)
-	if errors.Is(err, os.ErrNotExist) {
-		_, writeErr := fmt.Fprintf(a.Stdout, "import valid: %s -> %s\n", meta.ID, targetCWD)
-		return writeErr
-	}
+	existing, err := codex.ExistingRollouts(home, meta.ID)
 	if err != nil {
-		return fmt.Errorf("inspect existing rollout: %w", err)
+		return err
 	}
-	if existingMeta.ID != meta.ID {
-		return fmt.Errorf("rollout destination belongs to session %s", existingMeta.ID)
+	if len(existing) == 0 {
+		_, err := fmt.Fprintf(a.Stdout, "import valid: %s -> %s\n", meta.ID, targetCWD)
+		return err
 	}
 	switch policy {
 	case collisionSkip:
 		_, err = fmt.Fprintf(a.Stdout, "session %s already exists; would skip\n", meta.ID)
 		return err
 	case collisionReplace:
+		if err := requireReplaceable(existing, destination, meta.ID); err != nil {
+			return err
+		}
 		_, err = fmt.Fprintf(a.Stdout, "replacement valid: %s -> %s\n", meta.ID, targetCWD)
 		return err
 	default:
 		return fmt.Errorf("session %s already exists", meta.ID)
 	}
+}
+
+// requireReplaceable allows replacement only for one active rollout at the
+// expected destination; archived or moved copies must be handled in Codex.
+func requireReplaceable(existing []string, destination, sessionID string) error {
+	if len(existing) == 1 && filepath.Clean(existing[0]) == filepath.Clean(destination) {
+		return nil
+	}
+	return fmt.Errorf("session %s exists at %s; restore or delete it in Codex before replacing it", sessionID, strings.Join(existing, ", "))
 }
 
 func (a *App) resumeIfRequested(ctx context.Context, resume bool, cwd, sessionID string) error {
