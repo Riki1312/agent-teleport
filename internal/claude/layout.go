@@ -11,11 +11,6 @@ type layout struct {
 	// versions are accepted with a warning while their transcripts still pass
 	// structural validation.
 	newestTested string
-	// environmentAttachments are the attachment types that record the
-	// session's environment, such as its working directory, system prompt, and
-	// instruction files. Claude Code replays them when it resumes a session, so
-	// import moves every workspace path they mention.
-	environmentAttachments map[string]struct{}
 }
 
 // layouts lists the supported transcript layouts, oldest first. Each layout is
@@ -24,11 +19,6 @@ var layouts = []layout{
 	{
 		minimum:      "2.1.317",
 		newestTested: "2.1.319",
-		environmentAttachments: map[string]struct{}{
-			"environment":     {},
-			"instructions":    {},
-			"prompt_snapshot": {},
-		},
 	},
 }
 
@@ -39,9 +29,4 @@ func layoutFor(version string) (layout, bool, error) {
 	return semver.Select("Claude Code", version, layouts, func(candidate layout) semver.Range {
 		return semver.Range{Minimum: candidate.minimum, NewestTested: candidate.newestTested}
 	})
-}
-
-func (l layout) isEnvironmentAttachment(attachmentType string) bool {
-	_, ok := l.environmentAttachments[attachmentType]
-	return ok
 }

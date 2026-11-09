@@ -50,6 +50,11 @@ func New(moves ...Move) (Mapping, error) {
 	return Mapping{moves: sorted}, nil
 }
 
+// IsEmpty reports whether the mapping moves no directory.
+func (m Mapping) IsEmpty() bool {
+	return len(m.moves) == 0
+}
+
 // Reverse returns the mapping that moves every target back to its source.
 func (m Mapping) Reverse() Mapping {
 	reversed := make([]Move, len(m.moves))
@@ -78,6 +83,17 @@ func (m Mapping) Rewrite(record []byte, members ...string) ([]byte, int, error) 
 		return nil, 0, ErrIrreversible
 	}
 	return rewritten, changed, nil
+}
+
+// RewriteText moves every mention in plain text, such as a saved tool output,
+// and fails with ErrIrreversible unless the reverse mapping restores text
+// exactly.
+func (m Mapping) RewriteText(text []byte) ([]byte, error) {
+	rewritten := []byte(m.Path(string(text)))
+	if !bytes.Equal([]byte(m.Reverse().Path(string(rewritten))), text) {
+		return nil, ErrIrreversible
+	}
+	return rewritten, nil
 }
 
 func (m Mapping) rewrite(record []byte, members []string) ([]byte, int, error) {
@@ -200,6 +216,16 @@ func mention(value, path string, offset int) int {
 		offset = start + 1
 	}
 	return -1
+}
+
+// Within returns the path that path has once the directory from, which must
+// contain it, moves to to.
+func Within(path, from, to string) (string, error) {
+	relative, err := filepath.Rel(from, path)
+	if err != nil || relative == ".." || strings.HasPrefix(relative, ".."+string(filepath.Separator)) || !filepath.IsAbs(from) {
+		return "", fmt.Errorf("%s is not inside %s", path, from)
+	}
+	return filepath.Join(to, relative), nil
 }
 
 // span is the byte range of one JSON value inside a record.

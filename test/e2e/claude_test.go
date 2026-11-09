@@ -50,11 +50,10 @@ func TestClaudeTwoHomeTransfer(t *testing.T) {
 		"import", archivePath, "--cwd", targetCWD), "already up to date")
 
 	// Claude Code continues the imported session from the target workspace,
-	// even by folder name with --continue, and sees only target paths in its
-	// recorded environment.
+	// even by folder name with --continue, and sees only target paths.
 	resumed := target.request(t, targetCWD, "--continue", "after import")
 	resumed.requireTexts(t, "spawning", "child result", "reply")
-	resumed.requireEnvironment(t, targetCWD, sourceCWD, source.home)
+	resumed.requireMoved(t, targetCWD, sourceCWD, source.home)
 
 	exported := runClaude(t, binary, target, nil, true, "export", "--all", sessionID, "-o", "-")
 	sourceTranscript := readTranscript(t, source.home, sessionID)
@@ -93,7 +92,7 @@ func TestClaudeTwoHomeTransfer(t *testing.T) {
 
 	moved := target.request(t, otherCWD, "--resume", sessionID, "after the move")
 	moved.requireTexts(t, "spawning", "child result", "continue on the source")
-	moved.requireEnvironment(t, otherCWD, sourceCWD, source.home)
+	moved.requireMoved(t, otherCWD, sourceCWD, source.home)
 }
 
 // requireClaude returns the installed Claude Code binary when the built CLI
@@ -491,28 +490,29 @@ func (r apiRequest) requireTexts(t *testing.T, want ...string) {
 	}
 }
 
-// requireEnvironment requires the recorded environment that Claude Code sends,
-// its system prompt and system messages, to name workspace and none of the
-// source paths, and requires no notice that the workspace moved.
-func (r apiRequest) requireEnvironment(t *testing.T, workspace string, sourcePaths ...string) {
+// requireMoved requires the conversation Claude Code sends, its system prompt
+// and every message, to name workspace and none of the source paths, and
+// requires no notice that the workspace moved.
+func (r apiRequest) requireMoved(t *testing.T, workspace string, sourcePaths ...string) {
 	t.Helper()
-	var environment []string
+	conversation := r.texts()
 	for _, block := range r.System {
-		environment = append(environment, block.Text)
+		conversation = append(conversation, block.Text)
 	}
 	for _, message := range r.Messages {
-		if message.Role == "system" {
-			environment = append(environment, string(message.Content))
-		}
+		conversation = append(conversation, string(message.Content))
 	}
-	joined := strings.Join(environment, "\n")
+	joined := strings.Join(conversation, "\n")
 	if !strings.Contains(joined, workspace) {
-		t.Fatal("resumed environment does not name the target workspace")
+		t.Fatal("resumed conversation does not name the target workspace")
 	}
 	for _, path := range sourcePaths {
 		if strings.Contains(joined, path) {
-			t.Fatalf("resumed environment still names %s", path)
+			t.Fatalf("resumed conversation still names %s", path)
 		}
+	}
+	if strings.Contains(joined, "(was ") {
+		t.Fatal("Claude Code reported that the workspace moved")
 	}
 }
 

@@ -18,7 +18,7 @@ Each entry uses this shape:
 
 ### Preserve recorded history with honest fidelity
 
-- `decision`: A transfer preserves the complete recorded provider event stream, apart from documented workspace path rewrites. It does not transfer live tools, processes, credentials, project files, or external state.
+- `decision`: A transfer preserves the complete recorded provider event stream, apart from documented workspace path moves. It does not transfer live tools, processes, credentials, project files, or external state.
 - `rationale`: Recorded tool calls replay as history, but copying session data cannot reproduce the source environment.
 - `impact`: Archives store provider files unchanged, and every transformation is documented in `ARCHITECTURE.md`.
 
@@ -78,12 +78,6 @@ Each entry uses this shape:
 - `rationale`: Claude Code has no index: it resumes a transcript found in any project folder, keeps rewinds as branches inside the transcript, and writes native forks as self-contained sessions. Its project folder name is derived from the workspace path, so `--continue` and the session picker find only transcripts in the right folder.
 - `impact`: Rewinds, forks, and sub-agents need no special handling. Imports reproduce Claude Code's folder naming, including the hash of long paths.
 
-### Move Claude Code environment paths
-
-- `decision`: On import, move the source workspace and the source project folder, recorded through the manifest's `home`, to the target's. Rewrite each record's `cwd` and every boundary-delimited mention in `environment`, `instructions`, and `prompt_snapshot` attachments, reversibly; leave messages, tool calls, tool results, and request logs as recorded.
-- `rationale`: Claude Code replays the recorded system prompt and environment when it resumes, and without the rewrite the model would see the old workspace and memory folder, with only a native note that the directory moved.
-- `impact`: Resumed requests name only target paths in their environment, and moving a session back restores its original bytes. Saved tool outputs keep their source paths in tool results.
-
 ### Coordinate with Claude Code through its session registry
 
 - `decision`: Refuse to export a session that a live process in Claude Code's `sessions/<pid>.json` registry reports as anything but idle, and refuse to change a session that a live process has open.
@@ -102,11 +96,11 @@ Each entry uses this shape:
 - `rationale`: App Server `thread/list` omits archived threads, and relying on it once duplicated an archived session and deleted it during cleanup. Rollout names carry local time, so a computed path cannot identify a natively created rollout.
 - `impact`: Import never updates archived or moved copies; the user restores or deletes them in Codex first.
 
-### Remap workspace paths string by string
+### Move workspace paths everywhere
 
-- `decision`: In workspace metadata events, rewrite every mention of the source workspace at path boundaries inside JSON strings, keep all other bytes, and fail unless rewriting back restores the original bytes. Canonicalize target workspaces, resolving symlinks in existing ancestors.
-- `rationale`: Codex records the workspace in sandbox entries, workspace roots, `file://` URIs, and generated text as well as `cwd` keys, and native Codex canonicalizes paths such as `/var` and `/private/var` on macOS.
-- `impact`: Remapping is reversible, which repository-relative sessions rely on.
+- `decision`: Moving a session to another directory rewrites every boundary-delimited mention of the source directory in every JSON string of every record, including messages, tool calls, tool results, and request logs, and in saved tool outputs. All other bytes are kept, and the move fails unless moving back restores the original bytes. Claude Code sessions also move their project folder, recorded through the manifest's `home`, to the target's. Target workspaces are canonicalized, resolving symlinks in existing ancestors.
+- `rationale`: Providers record the workspace in metadata, sandbox entries, `file://` URIs, generated text, and replayed system prompts, and tool calls and outputs name files by absolute path. Moving all of them lets the resumed agent see paths that exist on the destination, and keeps machine paths out of repository sessions.
+- `impact`: Every provider adapter offers a pure `Relocate`, which import and repository sessions use. A session that already mentions the target directory cannot be moved there. Paths outside the moved directory, such as the user's home, stay as recorded.
 
 ## Engineering
 

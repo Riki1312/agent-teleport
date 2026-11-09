@@ -60,11 +60,11 @@ func (s *Store) prepareSession(source archive.Archive, workspace string) (codexS
 	if sourceLayout.minimum != s.layout.minimum {
 		return codexSession{}, fmt.Errorf("archive from Codex %s uses a rollout layout that Codex %s does not read", source.Manifest.ProviderVersion, s.version)
 	}
-	remapped, err := s.layout.remapSession(imported, workspace)
+	relocated, err := relocate(s.layout, imported, imported.head(imported.root).meta.CWD, workspace)
 	if err != nil {
-		return codexSession{}, fmt.Errorf("remap workspace: %w", err)
+		return codexSession{}, err
 	}
-	return remapped, nil
+	return relocated, nil
 }
 
 // recoverSession completes or rolls back writes to the session's threads that

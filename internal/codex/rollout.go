@@ -123,26 +123,6 @@ func (l layout) advanceTurns(state *turnState, data []byte) error {
 	return nil
 }
 
-// validateRollout checks that data is one self-contained Codex session ending
-// after a completed turn, and returns its recorded identity.
-func (l layout) validateRollout(data []byte) (sessionMeta, error) {
-	meta, err := parseRollout(data)
-	if err != nil {
-		return sessionMeta{}, err
-	}
-	if meta.Base != nil {
-		return sessionMeta{}, errors.New("rollout extends another rollout")
-	}
-	var state turnState
-	if err := l.advanceTurns(&state, data); err != nil {
-		return sessionMeta{}, err
-	}
-	if state.open || state.completed == 0 {
-		return sessionMeta{}, errors.New("rollout does not end after a completed turn")
-	}
-	return meta, nil
-}
-
 // validSessionID accepts only UUIDv7 strings, which also keeps a session ID safe
 // to use in rollout file names.
 func validSessionID(id string) bool {
@@ -167,59 +147,29 @@ func validSessionID(id string) bool {
 	return true
 }
 
-// remapWorkspace moves a self-contained rollout from its recorded workspace to
-// targetCWD; see remapLines.
-func (l layout) remapWorkspace(data []byte, targetCWD string) ([]byte, sessionMeta, error) {
-	meta, err := l.validateRollout(data)
-	if err != nil {
-		return nil, sessionMeta{}, err
-	}
-	remapped, changed, err := l.remapLines(data, meta.CWD, targetCWD)
-	if err != nil {
-		return nil, sessionMeta{}, err
-	}
-	if changed == 0 {
-		return nil, sessionMeta{}, errors.New("rollout contains no recognized workspace metadata")
-	}
-	meta.CWD = targetCWD
-	return remapped, meta, nil
-}
-
-// remapLines moves every mention of sourceCWD in recognized workspace metadata
-// events to targetCWD, keeping the relative suffix of paths inside the
-// workspace, and returns the number of strings changed. Only rewritten JSON
-// strings change; all other bytes, including recorded tool results, stay as
-// recorded. The rewrite must be reversible, so a rollout whose metadata
-// already mentions targetCWD fails.
-func (l layout) remapLines(data []byte, sourceCWD, targetCWD string) ([]byte, int, error) {
-	mapping, err := pathmap.New(pathmap.Move{From: sourceCWD, To: targetCWD})
-	if err != nil {
-		return nil, 0, err
-	}
+// relocateLines moves every path that mapping covers in every record of
+// data, keeping the relative suffix of paths inside a moved directory, and
+// returns the number of strings changed. Only rewritten JSON strings change,
+// and the rewrite must be reversible, so a rollout that already mentions a
+// target directory fails.
+func relocateLines(data []byte, mapping pathmap.Mapping) ([]byte, int, error) {
 	lines := bytes.Split(data, []byte{'\n'})
-	remapped := 0
+	relocated := 0
 	for index, line := range lines {
 		if len(line) == 0 {
 			continue
 		}
-		kind, err := classifyEvent(line)
-		if err != nil {
-			return nil, 0, fmt.Errorf("decode rollout line %d: %w", index+1, err)
-		}
-		if !l.isWorkspaceEvent(kind) {
-			continue
-		}
 		rewritten, changed, err := mapping.Rewrite(line)
 		if errors.Is(err, pathmap.ErrIrreversible) {
-			return nil, 0, fmt.Errorf("rollout line %d already mentions %s; the workspace remap would not be reversible", index+1, targetCWD)
+			return nil, 0, fmt.Errorf("rollout line %d already mentions the target directory; the workspace move would not be reversible", index+1)
 		}
 		if err != nil {
-			return nil, 0, fmt.Errorf("remap rollout line %d: %w", index+1, err)
+			return nil, 0, fmt.Errorf("move paths on rollout line %d: %w", index+1, err)
 		}
 		lines[index] = rewritten
-		remapped += changed
+		relocated += changed
 	}
-	return bytes.Join(lines, []byte{'\n'}), remapped, nil
+	return bytes.Join(lines, []byte{'\n'}), relocated, nil
 }
 
 // storedSession lists the files Codex and agent-teleport keep for one session.

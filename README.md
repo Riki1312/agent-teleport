@@ -35,7 +35,7 @@ Importing a session that already exists is safe to repeat: a longer archive upda
 
 An archive contains the session's recorded history and nothing else. Project files, uncommitted changes, credentials, running processes, and tool state stay on the source machine, so check out the same code before resuming. Archives can contain prompts, command output, file contents, and secrets printed during the session: treat them as sensitive.
 
-A session travels whole. A Codex session brings the sub-agent threads it spawned, the reverts it went through, and the part of each session it was forked from; a Claude Code session brings its rewinds, sub-agent transcripts, and saved tool outputs. Workspace paths in the recorded environment are moved to the target directory, so the agent sees where it now runs. Close a session in its agent before importing a newer copy of it; agent-teleport refuses to change a session that is open.
+A session travels whole. A Codex session brings the sub-agent threads it spawned, the reverts it went through, and the part of each session it was forked from; a Claude Code session brings its rewinds, sub-agent transcripts, and saved tool outputs. Every mention of the workspace path, including in tool calls and outputs, is moved to the target directory, so the agent sees files where they now are. Close a session in its agent before importing a newer copy of it; agent-teleport refuses to change a session that is open.
 
 ## Development
 

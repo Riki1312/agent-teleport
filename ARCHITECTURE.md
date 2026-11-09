@@ -8,7 +8,7 @@ The CLI is a single CGO-free Go binary, `agent-teleport`, for Linux and macOS. I
 
 Goals:
 
-- Preserve the complete recorded session history byte for byte, apart from documented workspace path rewrites.
+- Preserve the complete recorded session history byte for byte, apart from documented workspace path moves.
 - Map an imported session to a different local workspace.
 - Make every command safe, inspectable, scriptable, and predictable.
 - Fail without changing local state when a storage layout is unknown.
@@ -23,7 +23,7 @@ Non-goals:
 
 ## Fidelity model
 
-A transfer is lossless with respect to the recorded provider event stream: an archive stores the provider's files unchanged. Importing into another workspace rewrites workspace paths in the metadata records that the provider reads when it rebuilds session state or replays its environment, and nothing else. Recorded tool calls and their results stay as recorded, so a resumed session may refer to paths, tools, or permissions that differ on the destination machine.
+A transfer is lossless with respect to the recorded provider event stream: an archive stores the provider's files unchanged. Importing into another directory moves the workspace path, and nothing else: every mention of the source workspace at path boundaries, inside every JSON string of every record and in saved tool outputs, becomes the same path inside the target workspace, and moving back restores the original bytes. Paths outside the workspace stay as recorded, so a resumed session may still refer to files, tools, or permissions that differ on the destination machine.
 
 ## Commands
 
@@ -109,7 +109,7 @@ internal/archive          provider-neutral manifest, packing, validation
 internal/codex            Codex adapter: discovery, export, import, repair
 internal/codex/appserver  JSON-RPC client for codex app-server --stdio
 internal/claude           Claude Code adapter: discovery, export, import
-internal/pathmap          reversible workspace path rewriting in JSON records
+internal/pathmap          reversible workspace path moves in JSON records and text
 internal/fsutil           stable reads and atomic writes
 internal/semver           provider version ordering
 internal/buildinfo        build version
@@ -145,7 +145,7 @@ An archived Codex session therefore holds every object of the root thread and of
 
 1. Decode and validate the whole archive in memory, and require the archive's Codex version and the installed version to share a rollout layout.
 2. Canonicalize the target workspace, resolving symlinks in its existing ancestors.
-3. Rewrite workspace paths in every file: every mention of the session's workspace, at path boundaries, inside the JSON strings of workspace metadata events. This covers plain paths, paths below the workspace, `file://` URIs, and paths embedded in Codex-generated text. Other bytes are preserved, and the import fails unless rewriting back would restore the original bytes. Every reference is moved to the same record boundary of the rewritten object.
+3. Move the workspace in every file, as described in the fidelity model. This covers plain paths, paths below the workspace, `file://` URIs, paths embedded in generated text, and tool calls and outputs. Every reference is moved to the same record boundary of the rewritten object.
 4. Recover writes an earlier import left unfinished.
 5. Plan every thread before changing anything. Codex's stores are the source of truth, because Codex lists neither archived threads nor forks without turns. A local thread is compared segment by segment, where a segment is the original rollout or the records a snapshot holds after its revert header, and the update rule decides whether to keep it, append the incoming records, or replay missing reverts. Ancestors outside the session are reused when they contain the referenced prefix and are never modified; Codex also refuses to delete a thread that forks reference.
 6. Execute the plan in archive order. A new original rollout is written to a stage file under its native name and hard-linked into place, so Codex never sees a partial file and an existing one is never overwritten. A revert is replayed through App Server `thread/revert` on the same turn, so that Codex writes its own snapshot and records it as the thread's current history; the archived snapshot's later records are then appended to it. References to replayed snapshots are pointed at Codex's new objects.
@@ -191,7 +191,7 @@ Claude Code has no index and no server: it resumes a session by finding its tran
 ### Import
 
 1. Validate the archive and require the archive's Claude Code version and the installed version to share a transcript layout.
-2. Move two directories: the source workspace to the target workspace, and the source project folder to the target's, which the recorded system prompt names as the memory folder. In every transcript record the working directory moves, and in environment attachments (`environment`, `instructions`, and `prompt_snapshot`) every mention at path boundaries moves; Claude Code replays these when it resumes, so the model sees only target paths. Messages, tool calls, tool results, and request logs stay as recorded, so saved tool outputs keep their source paths. The rewrite must be reversible.
+2. Move two directories in every record and saved tool output: the source workspace to the target workspace, and the source project folder to the target's, which the recorded system prompt names as the memory folder and tool results name for saved outputs. Claude Code replays the recorded system prompt and environment when it resumes, so the model sees only target paths.
 3. Compare every file with the local copy in the target's project folder. Transcripts follow the update rule by prefix; tool outputs must match; sub-agent metadata follows the rest of the session. A copy in another project folder is moved only with `--replace`.
 4. Refuse any change while a running process has the session open. The registry is checked, not locked, so a Claude Code process that starts during an import is not detected.
 5. Write each file to a stage file and rename it into place, the transcript last, then remove the files a replacement drops and verify the result.
@@ -229,7 +229,7 @@ Session histories can contain prompts, model output, commands, tool results, fil
 
 ## Testing
 
-- Unit tests cover archive validation, rollout and transcript validation, path remapping, the update rule, replacement recovery, and CLI parsing.
+- Unit tests cover archive validation, rollout and transcript validation, path moves, the update rule, replacement recovery, and CLI parsing.
 - A Codex two-home end-to-end test drives the built binary against a native Codex CLI and sanitized fixtures, without credentials or model calls: export, inspect, piped transfer, every update outcome, replacement recovery, archived sessions, forks, reverts, sub-agents, and resume after repair.
 - A Claude Code two-home end-to-end test records sessions with the native Claude Code CLI against a scripted local Messages API, so it needs no credentials and makes no model calls: sub-agents, saved tool outputs, every update outcome, open and busy sessions, moves between workspaces, a hashed project folder, and resumes whose requests must name only target paths.
 - CI installs every tested version of both providers on Linux and macOS and requires both tests against each.

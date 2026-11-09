@@ -14,6 +14,7 @@ import (
 	"strconv"
 
 	"github.com/Riki1312/agent-teleport/internal/archive"
+	"github.com/Riki1312/agent-teleport/internal/pathmap"
 )
 
 // maxSessionFiles bounds how many rollout files one session may span.
@@ -508,12 +509,11 @@ func lastOrdinal(data []byte) (int64, error) {
 	return *record.Ordinal, nil
 }
 
-// remapSession moves every file of the session from the root's workspace to
-// target. Rewriting a file changes its length, so every reference into it is
+// relocateSession moves every path that mapping covers in every file of the
+// session. Rewriting a file changes its length, so every reference into it is
 // moved to the same record boundary in the rewritten file.
-func (l layout) remapSession(session codexSession, target string) (codexSession, error) {
-	source := session.head(session.root).meta.CWD
-	if source == target {
+func (l layout) relocateSession(session codexSession, mapping pathmap.Mapping) (codexSession, error) {
+	if mapping.IsEmpty() {
 		return session, nil
 	}
 	boundaries := map[string]boundaryMap{}
@@ -529,12 +529,9 @@ func (l layout) remapSession(session codexSession, target string) (codexSession,
 				return codexSession{}, fmt.Errorf("%s: %w", file.name, err)
 			}
 		}
-		remapped, changed, err := l.remapLines(data, source, target)
+		remapped, _, err := relocateLines(data, mapping)
 		if err != nil {
 			return codexSession{}, fmt.Errorf("%s: %w", file.name, err)
-		}
-		if file.meta.ID == session.root && file.object == file.meta.ID && changed == 0 {
-			return codexSession{}, errors.New("rollout contains no recognized workspace metadata")
 		}
 		parsed, err := newRolloutFile(file.name, remapped)
 		if err != nil {

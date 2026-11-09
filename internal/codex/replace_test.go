@@ -118,10 +118,11 @@ func (s *fakeReplacementState) repair(meta sessionMeta) error {
 	if err != nil {
 		return err
 	}
-	actual, err := testLayout.validateRollout(data)
+	session, err := singleSession(data)
 	if err != nil {
 		return err
 	}
+	actual := session.head(session.root).meta
 	if actual.ID != meta.ID || actual.CWD != meta.CWD {
 		return errors.New("repaired rollout metadata does not match")
 	}
@@ -133,7 +134,7 @@ func replacementFixture(t *testing.T) (string, []byte, []byte, sessionMeta) {
 	t.Helper()
 	destination := filepath.Join(t.TempDir(), "rollout.jsonl")
 	oldRollout := fixtureRollout("/old/workspace")
-	newRollout, newMeta, err := testLayout.remapWorkspace(oldRollout, "/new/workspace")
+	newRollout, newMeta, err := relocateRollout(oldRollout, "/new/workspace")
 	if err != nil {
 		t.Fatal(err)
 	}

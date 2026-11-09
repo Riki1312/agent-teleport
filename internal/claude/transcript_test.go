@@ -1,6 +1,7 @@
 package claude
 
 import (
+	"errors"
 	"strings"
 	"testing"
 
@@ -108,7 +109,7 @@ func TestCompleteRecordsDropsARecordBeingWritten(t *testing.T) {
 	}
 }
 
-func TestRemapTranscriptMovesOnlyWorkspaceMetadata(t *testing.T) {
+func TestRelocateRecordsMovesEveryPath(t *testing.T) {
 	mapping, err := pathmap.New(
 		pathmap.Move{From: "/work/project", To: "/target"},
 		pathmap.Move{From: "/home/a/.claude/projects/-work-project", To: "/home/b/.claude/projects/-target"},
@@ -117,43 +118,39 @@ func TestRemapTranscriptMovesOnlyWorkspaceMetadata(t *testing.T) {
 		t.Fatal(err)
 	}
 	transcript := lines(
-		`{"type":"user","message":{"role":"user","content":"read /work/project/a"},"cwd":"/work/project"}`,
-		`{"type":"attachment","attachment":{"type":"environment","snapshot":"{\"workingDirectory\":\"/work/project\"}"},"rendered":[{"content":"cwd: /work/project"}],"cwd":"/work/project"}`,
+		`{"type":"user","message":{"role":"user","content":"read /work/project/a and /work/project-other"},"cwd":"/work/project"}`,
 		`{"type":"attachment","attachment":{"type":"prompt_snapshot","systemPrompt":"memory at /home/a/.claude/projects/-work-project/memory/"},"cwd":"/work/project"}`,
-		`{"type":"attachment","attachment":{"type":"file","filename":"/work/project/a"},"cwd":"/work/project"}`,
 	)
 
 	// when
-	remapped, err := layouts[0].remapTranscript(transcript, mapping)
+	relocated, err := relocateRecords(transcript, mapping)
 
 	// then
 	if err != nil {
 		t.Fatal(err)
 	}
 	want := lines(
-		`{"type":"user","message":{"role":"user","content":"read /work/project/a"},"cwd":"/target"}`,
-		`{"type":"attachment","attachment":{"type":"environment","snapshot":"{\"workingDirectory\":\"/target\"}"},"rendered":[{"content":"cwd: /target"}],"cwd":"/target"}`,
+		`{"type":"user","message":{"role":"user","content":"read /target/a and /work/project-other"},"cwd":"/target"}`,
 		`{"type":"attachment","attachment":{"type":"prompt_snapshot","systemPrompt":"memory at /home/b/.claude/projects/-target/memory/"},"cwd":"/target"}`,
-		`{"type":"attachment","attachment":{"type":"file","filename":"/work/project/a"},"cwd":"/target"}`,
 	)
-	if string(remapped) != string(want) {
-		t.Fatalf("remapTranscript() =\n%s\nwant\n%s", remapped, want)
+	if string(relocated) != string(want) {
+		t.Fatalf("relocateRecords() =\n%s\nwant\n%s", relocated, want)
 	}
 }
 
-func TestRemapTranscriptRejectsIrreversibleRewrites(t *testing.T) {
+func TestRelocateRecordsRejectsIrreversibleRewrites(t *testing.T) {
 	mapping, err := pathmap.New(pathmap.Move{From: "/work/project", To: "/target"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	transcript := lines(`{"type":"attachment","attachment":{"type":"instructions","text":"/work/project and /target"},"cwd":"/work/project"}`)
+	transcript := lines(`{"type":"user","message":{"role":"user","content":"/work/project and /target"},"cwd":"/work/project"}`)
 
 	// when
-	_, err = layouts[0].remapTranscript(transcript, mapping)
+	_, err = relocateRecords(transcript, mapping)
 
 	// then
-	if err == nil || !strings.Contains(err.Error(), "reversible") {
-		t.Fatalf("remapTranscript() error = %v", err)
+	if !errors.Is(err, pathmap.ErrIrreversible) {
+		t.Fatalf("relocateRecords() error = %v", err)
 	}
 }
 

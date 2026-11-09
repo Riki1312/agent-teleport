@@ -19,6 +19,7 @@ import (
 
 	"github.com/Riki1312/agent-teleport/internal/archive"
 	"github.com/Riki1312/agent-teleport/internal/codex/appserver"
+	"github.com/Riki1312/agent-teleport/internal/pathmap"
 	"github.com/Riki1312/agent-teleport/internal/provider"
 )
 
@@ -39,6 +40,7 @@ var Adapter = provider.Adapter{
 	},
 	Diagnose:        Diagnose,
 	ValidateArchive: ValidateArchive,
+	Relocate:        Relocate,
 }
 
 // BinaryEnvironment names the variable that overrides the Codex binary path.
@@ -231,6 +233,55 @@ func (s *Store) appServer() (*appserver.Client, error) {
 	}
 	s.client = client
 	return client, nil
+}
+
+// Relocate moves an archived session from the directory from, which contains
+// its workspace, to the directory to: every mention of a path inside from, in
+// every record, moves to the same path inside to. Codex records no paths into
+// its home, so home only replaces the manifest's.
+func Relocate(source archive.Archive, from, to, home string) (archive.Archive, error) {
+	sourceLayout, session, err := validateArchive(source)
+	if err != nil {
+		return archive.Archive{}, err
+	}
+	relocated, err := relocate(sourceLayout, session, from, to)
+	if err != nil {
+		return archive.Archive{}, err
+	}
+	return archive.New(archive.Header{
+		Provider:        Provider,
+		ProviderVersion: source.Manifest.ProviderVersion,
+		SessionID:       relocated.root,
+		Workspace:       relocated.head(relocated.root).meta.CWD,
+		Home:            home,
+		CreatedAt:       source.Manifest.CreatedAt,
+	}, relocated.payloads())
+}
+
+// relocate moves session from the directory from, which must contain its
+// workspace, to to.
+func relocate(sourceLayout layout, session codexSession, from, to string) (codexSession, error) {
+	workspace := session.head(session.root).meta.CWD
+	target, err := pathmap.Within(workspace, from, to)
+	if err != nil {
+		return codexSession{}, err
+	}
+	var moves []pathmap.Move
+	if from != to {
+		moves = append(moves, pathmap.Move{From: from, To: to})
+	}
+	mapping, err := pathmap.New(moves...)
+	if err != nil {
+		return codexSession{}, err
+	}
+	relocated, err := sourceLayout.relocateSession(session, mapping)
+	if err != nil {
+		return codexSession{}, fmt.Errorf("move workspace: %w", err)
+	}
+	if moved := relocated.head(relocated.root).meta.CWD; moved != target {
+		return codexSession{}, fmt.Errorf("moved session records workspace %s, want %s", moved, target)
+	}
+	return relocated, nil
 }
 
 // validateArchive checks a Codex archive and returns its layout and session.

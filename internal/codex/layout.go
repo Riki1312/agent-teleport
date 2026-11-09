@@ -26,9 +26,6 @@ type layout struct {
 	// when every started turn has ended.
 	turnStarted eventKind
 	turnEnded   map[eventKind]struct{}
-	// workspaceEvents carry the workspace metadata Codex reads when it rebuilds
-	// thread state from a rollout.
-	workspaceEvents map[eventKind]struct{}
 	// revertHeaderRecords is the number of records Codex writes at the start
 	// of a revert snapshot, before any later turn.
 	revertHeaderRecords int
@@ -46,12 +43,6 @@ var layouts = []layout{
 			{eventType: "event_msg", payloadType: "task_complete"}: {},
 			{eventType: "event_msg", payloadType: "turn_aborted"}:  {},
 		},
-		workspaceEvents: map[eventKind]struct{}{
-			{eventType: "session_meta"}:                                      {},
-			{eventType: "world_state"}:                                       {},
-			{eventType: "turn_context"}:                                      {},
-			{eventType: "event_msg", payloadType: "thread_settings_applied"}: {},
-		},
 		revertHeaderRecords: 2,
 	},
 }
@@ -62,11 +53,6 @@ func layoutFor(version string) (layout, bool, error) {
 	return semver.Select("Codex", version, layouts, func(candidate layout) semver.Range {
 		return semver.Range{Minimum: candidate.minimum, NewestTested: candidate.newestTested}
 	})
-}
-
-func (l layout) isWorkspaceEvent(kind eventKind) bool {
-	_, ok := l.workspaceEvents[kind]
-	return ok
 }
 
 func (l layout) isTurnEnd(kind eventKind) bool {

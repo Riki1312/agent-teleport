@@ -11,7 +11,6 @@ import (
 
 	"github.com/Riki1312/agent-teleport/internal/archive"
 	"github.com/Riki1312/agent-teleport/internal/fsutil"
-	"github.com/Riki1312/agent-teleport/internal/pathmap"
 	"github.com/Riki1312/agent-teleport/internal/provider"
 )
 
@@ -43,9 +42,7 @@ func (s *Store) Import(request provider.ImportRequest) (provider.ImportResult, e
 	return result, nil
 }
 
-// prepareSession validates source and moves its workspace metadata to target.
-// The workspace moves to target, and the source project folder, which the
-// recorded system prompt names as the memory folder, moves to the target's.
+// prepareSession validates source and moves it to target.
 func (s *Store) prepareSession(source archive.Archive, target string) (claudeSession, error) {
 	sourceLayout, session, err := validateArchive(source)
 	if err != nil {
@@ -54,42 +51,7 @@ func (s *Store) prepareSession(source archive.Archive, target string) (claudeSes
 	if sourceLayout.minimum != s.layout.minimum {
 		return claudeSession{}, fmt.Errorf("archive from Claude Code %s uses a transcript layout that Claude Code %s does not read", source.Manifest.ProviderVersion, s.version)
 	}
-	var moves []pathmap.Move
-	for _, move := range []pathmap.Move{
-		{From: source.Manifest.Workspace, To: target},
-		{
-			From: filepath.Join(source.Manifest.Home, "projects", projectFolderName(source.Manifest.Workspace)),
-			To:   s.projectFolder(target),
-		},
-	} {
-		if move.From != move.To {
-			moves = append(moves, move)
-		}
-	}
-	if len(moves) == 0 {
-		return session, nil
-	}
-	mapping, err := pathmap.New(moves...)
-	if err != nil {
-		return claudeSession{}, err
-	}
-	files := make([]sessionFile, 0, len(session.files))
-	for _, file := range session.files {
-		if file.isTranscript() {
-			if file.data, err = sourceLayout.remapTranscript(file.data, mapping); err != nil {
-				return claudeSession{}, fmt.Errorf("%s: %w", file.path, err)
-			}
-		}
-		files = append(files, file)
-	}
-	remapped, err := newSession(session.id, files)
-	if err != nil {
-		return claudeSession{}, err
-	}
-	if remapped.info.workspace != target {
-		return claudeSession{}, fmt.Errorf("remapped transcript starts in %s, not %s", remapped.info.workspace, target)
-	}
-	return remapped, nil
+	return relocate(session, source.Manifest.Home, source.Manifest.Workspace, target, s.home)
 }
 
 // projectFolder returns the folder where Claude Code keeps the sessions of

@@ -91,11 +91,11 @@ func TestRemapSessionMovesReferencesAndRoundTrips(t *testing.T) {
 			}
 
 			// when
-			remapped, err := testLayout.remapSession(original, "/target/a-longer-workspace")
+			remapped, err := relocate(testLayout, original, "/workspace/source", "/target/a-longer-workspace")
 			if err != nil {
 				t.Fatal(err)
 			}
-			restored, err := testLayout.remapSession(remapped, "/workspace/source")
+			restored, err := relocate(testLayout, remapped, "/target/a-longer-workspace", "/workspace/source")
 
 			// then
 			if err != nil {

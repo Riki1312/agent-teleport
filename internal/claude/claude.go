@@ -21,6 +21,7 @@ import (
 	"time"
 
 	"github.com/Riki1312/agent-teleport/internal/archive"
+	"github.com/Riki1312/agent-teleport/internal/pathmap"
 	"github.com/Riki1312/agent-teleport/internal/provider"
 )
 
@@ -45,6 +46,7 @@ var Adapter = provider.Adapter{
 	},
 	Diagnose:        Diagnose,
 	ValidateArchive: ValidateArchive,
+	Relocate:        Relocate,
 }
 
 // Store is the local Claude Code installation.
@@ -194,6 +196,95 @@ func (s *Store) ResumeCommand(sessionID, workspace string) *exec.Cmd {
 func ValidateArchive(source archive.Archive) error {
 	_, _, err := validateArchive(source)
 	return err
+}
+
+// Relocate moves an archived session from the directory from, which contains
+// its workspace, to the directory to, with home as the new configuration
+// directory: every mention of a path inside from moves to the same path inside
+// to, and the session's project folder, which the recorded system prompt names
+// as the memory folder and tool results name for saved outputs, moves to its
+// folder under home. Every record and saved tool output is rewritten.
+func Relocate(source archive.Archive, from, to, home string) (archive.Archive, error) {
+	_, session, err := validateArchive(source)
+	if err != nil {
+		return archive.Archive{}, err
+	}
+	relocated, err := relocate(session, source.Manifest.Home, from, to, home)
+	if err != nil {
+		return archive.Archive{}, err
+	}
+	return archive.New(archive.Header{
+		Provider:        Provider,
+		ProviderVersion: source.Manifest.ProviderVersion,
+		SessionID:       relocated.id,
+		Workspace:       relocated.info.workspace,
+		Home:            home,
+		CreatedAt:       source.Manifest.CreatedAt,
+	}, relocated.payloads())
+}
+
+// relocate moves session, stored under sourceHome, from the directory from to
+// to, with home as the new configuration directory.
+func relocate(session claudeSession, sourceHome, from, to, home string) (claudeSession, error) {
+	target, err := pathmap.Within(session.info.workspace, from, to)
+	if err != nil {
+		return claudeSession{}, err
+	}
+	var moves []pathmap.Move
+	for _, move := range []pathmap.Move{
+		{From: from, To: to},
+		{
+			From: filepath.Join(sourceHome, "projects", projectFolderName(session.info.workspace)),
+			To:   filepath.Join(home, "projects", projectFolderName(target)),
+		},
+	} {
+		if move.From != move.To {
+			moves = append(moves, move)
+		}
+	}
+	mapping, err := pathmap.New(moves...)
+	if err != nil {
+		return claudeSession{}, err
+	}
+	if mapping.IsEmpty() {
+		return session, nil
+	}
+	files := make([]sessionFile, 0, len(session.files))
+	for _, file := range session.files {
+		moved, err := relocateFile(file, mapping)
+		if err != nil {
+			return claudeSession{}, fmt.Errorf("move workspace in %s: %w", file.path, err)
+		}
+		file.data = moved
+		files = append(files, file)
+	}
+	relocated, err := newSession(session.id, files)
+	if err != nil {
+		return claudeSession{}, err
+	}
+	if relocated.info.workspace != target {
+		return claudeSession{}, fmt.Errorf("moved transcript starts in %s, not %s", relocated.info.workspace, target)
+	}
+	return relocated, nil
+}
+
+// relocateFile moves every path that mapping covers in one session file:
+// every string of every JSON record, or the whole text of a tool output.
+func relocateFile(file sessionFile, mapping pathmap.Mapping) ([]byte, error) {
+	var moved []byte
+	var err error
+	switch file.kind {
+	case transcriptKind, agentTranscriptKind:
+		moved, err = relocateRecords(file.data, mapping)
+	case agentMetadataKind:
+		moved, _, err = mapping.Rewrite(file.data)
+	default:
+		moved, err = mapping.RewriteText(file.data)
+	}
+	if errors.Is(err, pathmap.ErrIrreversible) {
+		return nil, errors.New("it already mentions the target directory, so the move would not be reversible")
+	}
+	return moved, err
 }
 
 // validateArchive checks a Claude Code archive and returns its layout and

@@ -127,37 +127,17 @@ func promptText(message json.RawMessage) string {
 	return ""
 }
 
-// remapTranscript moves the workspace metadata of every record: the record's
-// working directory, and every mention of a mapped directory in environment
-// attachments. Messages, tool calls, and tool results stay as recorded. The
-// rewrite must be reversible.
-func (l layout) remapTranscript(data []byte, mapping pathmap.Mapping) ([]byte, error) {
+// relocateRecords moves every path that mapping covers in every record of a
+// transcript.
+func relocateRecords(data []byte, mapping pathmap.Mapping) ([]byte, error) {
 	lines := bytes.Split(data, []byte{'\n'})
 	for index, line := range lines {
 		if len(line) == 0 {
 			continue
 		}
-		var entry struct {
-			Type       string `json:"type"`
-			Attachment struct {
-				Type string `json:"type"`
-			} `json:"attachment"`
-		}
-		if err := json.Unmarshal(line, &entry); err != nil {
-			return nil, fmt.Errorf("transcript line %d: %w", index+1, err)
-		}
-		var rewritten []byte
-		var err error
-		if entry.Type == "attachment" && l.isEnvironmentAttachment(entry.Attachment.Type) {
-			rewritten, _, err = mapping.Rewrite(line)
-		} else {
-			rewritten, _, err = mapping.Rewrite(line, "cwd")
-		}
-		if errors.Is(err, pathmap.ErrIrreversible) {
-			return nil, fmt.Errorf("transcript line %d already mentions the target workspace; the workspace remap would not be reversible", index+1)
-		}
+		rewritten, _, err := mapping.Rewrite(line)
 		if err != nil {
-			return nil, fmt.Errorf("remap transcript line %d: %w", index+1, err)
+			return nil, fmt.Errorf("line %d: %w", index+1, err)
 		}
 		lines[index] = rewritten
 	}

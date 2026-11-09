@@ -257,3 +257,42 @@ func exitedProcess(t *testing.T) int {
 	}
 	return process.Pid
 }
+
+func TestRelocateMovesSavedToolOutputsAndTheProjectFolder(t *testing.T) {
+	outputPath := testSessionID + "/tool-results/output.txt"
+	sourceFolder := filepath.Join(sourceHome, "projects", projectFolderName(sourceWorkspace))
+	source, err := archive.New(archive.Header{
+		Provider: Provider, ProviderVersion: "2.1.319", SessionID: testSessionID,
+		Workspace: sourceWorkspace, Home: sourceHome, CreatedAt: time.Now(),
+	}, []archive.Payload{
+		{Path: testSessionID + ".jsonl", Data: lines(message("saved to "+sourceFolder+"/"+outputPath, sourceWorkspace))},
+		{Path: outputPath, Data: []byte(sourceWorkspace + "/main.go\n")},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// when
+	moved, err := Relocate(source, "/source", "/target", "/target-home")
+
+	// then
+	if err != nil {
+		t.Fatal(err)
+	}
+	targetFolder := filepath.Join("/target-home", "projects", projectFolderName("/target/project"))
+	transcript, _ := moved.Data(testSessionID + ".jsonl")
+	output, _ := moved.Data(outputPath)
+	if moved.Manifest.Workspace != "/target/project" || moved.Manifest.Home != "/target-home" ||
+		!strings.Contains(string(transcript), targetFolder+"/"+outputPath) || string(output) != "/target/project/main.go\n" {
+		t.Fatalf("Relocate() = %+v\n%s\n%s", moved.Manifest, transcript, output)
+	}
+	restored, err := Relocate(moved, "/target", "/source", sourceHome)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for index, payload := range restored.Payloads {
+		if string(payload.Data) != string(source.Payloads[index].Data) {
+			t.Fatalf("moving back changed %s", payload.Path)
+		}
+	}
+}

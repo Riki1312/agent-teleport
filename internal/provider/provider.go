@@ -36,6 +36,11 @@ type Adapter struct {
 	// ValidateArchive checks that an archive of this provider is internally
 	// consistent. It needs no local installation.
 	ValidateArchive func(source archive.Archive) error
+	// Relocate moves an archived session from the directory from, which
+	// contains its workspace, to the directory to, and records home as the
+	// provider's storage directory. Every path inside from moves, in every
+	// record, and the rewrite is reversible. It needs no local installation.
+	Relocate func(source archive.Archive, from, to, home string) (archive.Archive, error)
 }
 
 // Store is an opened local provider installation.
