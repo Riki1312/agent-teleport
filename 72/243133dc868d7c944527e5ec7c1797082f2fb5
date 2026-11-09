@@ -1,0 +1,24 @@
+internal/codex/codex.go
+  s_b3feabb7857cd3::t_8d0c9a80227c6a 242-243,246,250,260,267,271
+  s_b3feabb7857cd3::t_6b3b95d4162591 125-126,129,156-159,174-175,178,181,183,185,235-241,244-245,247-249,251-258,261,263-265,268-270,272-274,276-322
+internal/codex/codex_test.go
+  s_b3feabb7857cd3::t_dab1d330408e7b 46-123
+internal/codex/compatibility.go
+  s_b3feabb7857cd3::t_6b3b95d4162591 4-5,74-93
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.2",
+  "base_commit_sha": "72243133dc868d7c944527e5ec7c1797082f2fb5",
+  "prompts": {},
+  "sessions": {
+    "s_b3feabb7857cd3": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "fd1b6ebe-1b52-4a20-8b44-740169df5be6",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Riccardo <riki.brero@gmail.com>"
+    }
+  }
+}
