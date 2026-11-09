@@ -109,9 +109,15 @@ func (s *Store) Sessions(workspace string) ([]Session, error) {
 	if err != nil {
 		return nil, fmt.Errorf("list Codex sessions: %w", err)
 	}
+	// A scanning listing reports a reverted thread twice: once from Codex's
+	// database and once from its original rollout file.
 	sessions := make([]Session, 0, len(threads))
+	seen := map[string]bool{}
 	for _, thread := range threads {
-		sessions = append(sessions, newSession(thread))
+		if !seen[thread.ID] {
+			seen[thread.ID] = true
+			sessions = append(sessions, newSession(thread))
+		}
 	}
 	return sessions, nil
 }
@@ -155,11 +161,11 @@ func (s *Store) Export(session Session, createdAt time.Time) (archive.Archive, e
 	if session.rolloutPath == "" {
 		return archive.Archive{}, fmt.Errorf("Codex did not report a rollout path for session %s", session.ID)
 	}
-	exported, err := s.layout.readHistory(s.home, session.rolloutPath)
+	exported, err := s.layout.readSession(s.home, session.rolloutPath)
 	if err != nil {
 		return archive.Archive{}, fmt.Errorf("snapshot session %s: %w", session.ID, err)
 	}
-	meta := exported.session().meta
+	meta := exported.head(exported.root).meta
 	if meta.ID != session.ID {
 		return archive.Archive{}, fmt.Errorf("rollout session ID %s does not match selected session %s", meta.ID, session.ID)
 	}
@@ -223,25 +229,25 @@ func (s *Store) appServer() (*appserver.Client, error) {
 	return client, nil
 }
 
-// validateArchive checks a Codex archive and returns its layout and history.
-func validateArchive(source archive.Archive) (layout, history, error) {
+// validateArchive checks a Codex archive and returns its layout and session.
+func validateArchive(source archive.Archive) (layout, codexSession, error) {
 	if source.Manifest.Provider != Provider {
-		return layout{}, history{}, fmt.Errorf("archive provider %q is not %s", source.Manifest.Provider, Provider)
+		return layout{}, codexSession{}, fmt.Errorf("archive provider %q is not %s", source.Manifest.Provider, Provider)
 	}
 	sourceLayout, _, err := layoutFor(source.Manifest.ProviderVersion)
 	if err != nil {
-		return layout{}, history{}, err
+		return layout{}, codexSession{}, err
 	}
-	stored, err := sourceLayout.historyFromArchive(source)
+	stored, err := sourceLayout.sessionFromArchive(source)
 	if err != nil {
-		return layout{}, history{}, fmt.Errorf("validate session history: %w", err)
+		return layout{}, codexSession{}, fmt.Errorf("validate session history: %w", err)
 	}
-	meta := stored.session().meta
+	meta := stored.head(stored.root).meta
 	if source.Manifest.SessionID != meta.ID {
-		return layout{}, history{}, fmt.Errorf("manifest session ID %s does not match rollout %s", source.Manifest.SessionID, meta.ID)
+		return layout{}, codexSession{}, fmt.Errorf("manifest session ID %s does not match rollout %s", source.Manifest.SessionID, meta.ID)
 	}
 	if source.Manifest.Workspace != meta.CWD {
-		return layout{}, history{}, fmt.Errorf("manifest workspace %s does not match rollout %s", source.Manifest.Workspace, meta.CWD)
+		return layout{}, codexSession{}, fmt.Errorf("manifest workspace %s does not match rollout %s", source.Manifest.Workspace, meta.CWD)
 	}
 	return sourceLayout, stored, nil
 }

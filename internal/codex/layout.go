@@ -30,6 +30,9 @@ type layout struct {
 	// workspaceEvents carry the workspace metadata Codex reads when it rebuilds
 	// thread state from a rollout.
 	workspaceEvents map[eventKind]struct{}
+	// revertHeaderRecords is the number of records Codex writes at the start
+	// of a revert snapshot, before any later turn.
+	revertHeaderRecords int
 }
 
 // layouts lists the supported rollout layouts, oldest first. Each layout is
@@ -50,6 +53,7 @@ var layouts = []layout{
 			{eventType: "turn_context"}:                                      {},
 			{eventType: "event_msg", payloadType: "thread_settings_applied"}: {},
 		},
+		revertHeaderRecords: 2,
 	},
 }
 

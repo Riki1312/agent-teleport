@@ -202,6 +202,13 @@ func (c *Client) Fork(id string) (Thread, error) {
 	return c.threadResponse("thread/fork", map[string]any{"threadId": id}, "")
 }
 
+// Revert removes turn and every later turn from a thread's current history.
+// Codex writes a snapshot rollout and makes it the thread's current history.
+func (c *Client) Revert(id, turn string) error {
+	_, err := c.call("thread/revert", map[string]any{"threadId": id, "beforeTurnId": turn})
+	return err
+}
+
 // Delete removes a thread, including its rollout file and indexed state.
 func (c *Client) Delete(id string) error {
 	_, err := c.call("thread/delete", map[string]any{"threadId": id})

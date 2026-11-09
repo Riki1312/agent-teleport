@@ -57,7 +57,8 @@ Usage:
 The session is mapped to the current directory unless --cwd is given. When
 the session already exists, a copy that extends the other wins: a longer
 archive updates the local session, and a longer local session is kept.
-Copies that have diverged need --replace.
+Copies that have diverged need --replace. Sessions open in Codex are never
+changed; close them first.
 
 Options:
   --cwd PATH   Map the session to PATH instead of the current directory

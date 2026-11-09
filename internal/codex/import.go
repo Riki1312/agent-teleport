@@ -47,189 +47,529 @@ type ImportResult struct {
 }
 
 // Import validates an archive for the installed Codex version, maps it to
-// request.Workspace, and makes it available through Codex. Ancestors of a
-// forked session are placed first or reused when they already exist locally;
-// the session itself is updated only when the archive extends it. Nothing
-// changes before validation succeeds, and a dry run never starts App Server.
+// request.Workspace, and makes the session available through Codex: its root
+// thread, the threads it spawned, and the ancestors they fork from. Every
+// thread follows the fast-forward rule: new threads are placed, threads the
+// archive extends receive the new records, and reverts are replayed through
+// Codex. Nothing changes before the whole session has been planned, and a dry
+// run never starts App Server.
 func (s *Store) Import(request ImportRequest) (ImportResult, error) {
-	imported, err := s.prepareHistory(request.Archive, request.Workspace)
-	if err != nil {
-		return ImportResult{}, err
-	}
-	session := imported.session()
-	ancestors, err := s.planAncestors(imported.files[:len(imported.files)-1])
-	if err != nil {
-		return ImportResult{}, err
-	}
-	stored, err := findSession(s.home, session.meta.ID)
-	if err != nil {
-		return ImportResult{}, err
-	}
-	destination, err := importDestination(stored, s.home, session.name)
+	session, err := s.prepareSession(request.Archive, request.Workspace)
 	if err != nil {
 		return ImportResult{}, err
 	}
 	var client *appserver.Client
-	if request.DryRun {
-		if len(stored.pending) > 0 {
-			return ImportResult{}, errors.New("an interrupted replacement requires recovery; rerun without --dry-run")
-		}
-	} else {
+	if !request.DryRun {
 		if client, err = s.appServer(); err != nil {
 			return ImportResult{}, err
 		}
-		if err := s.layout.recoverReplacement(destination, session.meta.ID, resetThread(client, session.meta.ID), s.repairThread(client, destination)); err != nil {
-			return ImportResult{}, err
-		}
-		if stored, err = findSession(s.home, session.meta.ID); err != nil {
+		if err := s.recoverSession(client, session); err != nil {
 			return ImportResult{}, err
 		}
 	}
-	outcome, err := s.planImport(stored, destination, session, request.Replace)
+	plan, err := s.planSession(session, request.Replace)
 	if err != nil {
 		return ImportResult{}, err
 	}
-	result := ImportResult{SessionID: session.meta.ID, Workspace: session.meta.CWD, Outcome: outcome}
-	if request.DryRun {
+	root := session.head(session.root)
+	result := ImportResult{SessionID: session.root, Workspace: root.meta.CWD, Outcome: plan.outcome}
+	if request.DryRun || !plan.changes() {
 		return result, nil
 	}
-	for _, ancestor := range ancestors {
-		if err := s.placeRollout(ancestor.path, ancestor.data); err != nil {
-			return ImportResult{}, fmt.Errorf("place ancestor session: %w", err)
-		}
-	}
-	switch outcome {
-	case Imported:
-		err = s.placeNew(client, destination, session)
-	case Updated, Replaced:
-		err = s.replaceExisting(client, destination, session)
-	}
-	if err != nil {
+	if err := s.executePlan(client, session, plan); err != nil {
 		return ImportResult{}, err
 	}
 	return result, nil
 }
 
-// prepareHistory validates an archive for the installed Codex version and
-// returns its history mapped to workspace.
-func (s *Store) prepareHistory(source archive.Archive, workspace string) (history, error) {
+// prepareSession validates an archive for the installed Codex version and
+// returns its session mapped to workspace.
+func (s *Store) prepareSession(source archive.Archive, workspace string) (codexSession, error) {
 	sourceLayout, imported, err := validateArchive(source)
 	if err != nil {
-		return history{}, err
+		return codexSession{}, err
 	}
 	if sourceLayout.minimum != s.layout.minimum {
-		return history{}, fmt.Errorf("archive from Codex %s uses a rollout layout that Codex %s does not read", source.Manifest.ProviderVersion, s.version)
+		return codexSession{}, fmt.Errorf("archive from Codex %s uses a rollout layout that Codex %s does not read", source.Manifest.ProviderVersion, s.version)
 	}
-	remapped, err := s.layout.remapHistory(imported, workspace)
+	remapped, err := s.layout.remapSession(imported, workspace)
 	if err != nil {
-		return history{}, fmt.Errorf("remap workspace: %w", err)
+		return codexSession{}, fmt.Errorf("remap workspace: %w", err)
 	}
 	return remapped, nil
 }
 
-// ancestorPlacement is an ancestor rollout that an import must place.
-type ancestorPlacement struct {
-	path string
-	data []byte
+// recoverSession completes or rolls back writes to the session's threads that
+// an earlier import left unfinished.
+func (s *Store) recoverSession(client *appserver.Client, session codexSession) error {
+	for _, thread := range session.threads() {
+		stored, err := findSession(s.home, thread)
+		if err != nil {
+			return err
+		}
+		for _, path := range stored.appending {
+			if err := recoverAppend(s.home, thread, path); err != nil {
+				return err
+			}
+		}
+		for _, destination := range stored.pending {
+			if thread != session.root {
+				return fmt.Errorf("thread %s has an interrupted replacement that agent-teleport cannot recover", thread)
+			}
+			if err := s.layout.recoverReplacement(destination, thread, resetThread(client, thread), s.repairThread(client, destination)); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
 }
 
-// planAncestors returns the ancestors missing locally. An ancestor that exists
-// locally must already start with the prefix the history references, because
-// replacing an ancestor would change the history of its other forks.
-func (s *Store) planAncestors(ancestors []rolloutFile) ([]ancestorPlacement, error) {
-	var placements []ancestorPlacement
-	for _, ancestor := range ancestors {
-		stored, err := findSession(s.home, ancestor.meta.ID)
+// fileStep is what an import does with one rollout object of the archive.
+type fileStep int
+
+const (
+	// stepKeep leaves an equal or newer local object unchanged.
+	stepKeep fileStep = iota
+	// stepPlace writes a new original rollout.
+	stepPlace
+	// stepAppend appends the archive's newer records to a local object.
+	stepAppend
+	// stepReplay replays a revert through Codex, then appends the records the
+	// snapshot holds after its header.
+	stepReplay
+	// stepReplace replaces a diverged root thread through the recoverable
+	// replacement transaction.
+	stepReplace
+)
+
+// filePlan is the planned step for one rollout object of the archive.
+type filePlan struct {
+	step fileStep
+	// path is the local file a keep, append, or replace step refers to, or
+	// the destination of a place step.
+	path string
+	// records are the bytes an append step adds.
+	records []byte
+}
+
+// localObject is the local counterpart of an archived rollout object, used to
+// point references at it.
+type localObject struct {
+	object string
+	data   []byte
+	// from is the archived object the local one corresponds to.
+	from []byte
+}
+
+func (o localObject) moved(offset int64) (int64, error) {
+	return newBoundaryMap(o.from, o.data).moved(offset)
+}
+
+// sessionPlan is the planned import of a whole session.
+type sessionPlan struct {
+	files   []filePlan
+	objects map[string]localObject
+	outcome ImportOutcome
+}
+
+func (p sessionPlan) changes() bool {
+	for _, file := range p.files {
+		if file.step != stepKeep {
+			return true
+		}
+	}
+	return false
+}
+
+// planSession decides, without changing local state, how to import every
+// thread of the session.
+func (s *Store) planSession(session codexSession, replace bool) (sessionPlan, error) {
+	plan := sessionPlan{files: make([]filePlan, len(session.files)), objects: map[string]localObject{}}
+	outcomes := map[string]ImportOutcome{}
+	for _, thread := range session.threads() {
+		outcome, err := s.planThread(session, thread, replace, &plan)
+		if err != nil {
+			return sessionPlan{}, err
+		}
+		outcomes[thread] = outcome
+	}
+	plan.outcome = outcomes[session.root]
+	if plan.outcome == Unchanged || plan.outcome == KeptNewer {
+		for thread, outcome := range outcomes {
+			if thread != session.root && (outcome == Imported || outcome == Updated) {
+				plan.outcome = Updated
+			}
+		}
+	}
+	return plan, nil
+}
+
+// planThread plans the objects of one thread. Its archived objects form a
+// chain: the original rollout, then each revert snapshot. A local copy is
+// compared segment by segment, where a segment is the original rollout or the
+// records a snapshot holds after its revert header.
+func (s *Store) planThread(session codexSession, thread string, replace bool, plan *sessionPlan) (ImportOutcome, error) {
+	var chain []int
+	for index, file := range session.files {
+		if file.meta.ID == thread {
+			chain = append(chain, index)
+		}
+	}
+	first := session.files[chain[0]]
+	member := isSessionThread(first, session.root)
+	stored, err := findSession(s.home, thread)
+	if err != nil {
+		return "", err
+	}
+	switch {
+	case len(stored.archived) > 0:
+		return "", fmt.Errorf("thread %s is archived at %s; restore or delete it in Codex before importing it", thread, strings.Join(stored.archived, ", "))
+	case len(stored.pending) > 0 || len(stored.appending) > 0:
+		return "", fmt.Errorf("thread %s has an interrupted write; rerun without --dry-run to recover it", thread)
+	case len(stored.active) > 1:
+		return "", fmt.Errorf("thread %s has several rollouts: %s", thread, strings.Join(stored.active, ", "))
+	}
+	if len(stored.active) == 0 {
+		if len(stored.snapshots) > 0 {
+			return "", fmt.Errorf("thread %s has snapshots but no original rollout", thread)
+		}
+		path, err := activeRolloutPath(s.home, first.name)
+		if err != nil {
+			return "", err
+		}
+		plan.files[chain[0]] = filePlan{step: stepPlace, path: path}
+		for _, index := range chain[1:] {
+			if session.files[index].meta.SessionID == session.root && thread != session.root {
+				return "", fmt.Errorf("reverted sub-agent thread %s is not supported", thread)
+			}
+			plan.files[index] = filePlan{step: stepReplay}
+		}
+		return Imported, nil
+	}
+
+	local, err := s.localChain(stored)
+	if err != nil {
+		return "", err
+	}
+	replacingRoot := replace && thread == session.root
+	if member && local[0].meta.CWD != first.meta.CWD && !replacingRoot {
+		return "", fmt.Errorf("thread %s already exists in %s; import there with --cwd, or pass --replace", thread, local[0].meta.CWD)
+	}
+	if thread == session.root || member {
+		if err := requireClosed(s.home, thread); err != nil {
+			return "", err
+		}
+	}
+	incoming := make([]rolloutFile, len(chain))
+	for position, index := range chain {
+		incoming[position] = session.files[index]
+	}
+	if incoming[0], err = s.pointAtLocalObjects(incoming[0], plan.objects); err != nil {
+		return "", err
+	}
+	incomingSegments, err := s.segments(incoming)
+	if err != nil {
+		return "", err
+	}
+	localSegments, err := s.segments(local)
+	if err != nil {
+		return "", err
+	}
+	common := min(len(incomingSegments), len(localSegments))
+	for position := 0; position < common-1; position++ {
+		if !bytes.Equal(incomingSegments[position], localSegments[position]) {
+			return "", fmt.Errorf("thread %s has been reverted differently on this machine; delete it in Codex and import again", thread)
+		}
+		plan.keep(chain[position], incoming[position], local[position], nil)
+	}
+	last := common - 1
+	relation := compareHistories(localSegments[last], incomingSegments[last])
+	keepLast := func() { plan.keep(chain[last], incoming[last], local[last], nil) }
+	switch {
+	case !member && (relation == historiesEqual || relation == localAhead) && len(localSegments) >= len(incomingSegments):
+		keepLast()
+		return Unchanged, nil
+	case !member:
+		return "", fmt.Errorf("ancestor thread %s differs locally from the history in the archive", thread)
+	case len(incomingSegments) == len(localSegments) && relation == historiesEqual:
+		keepLast()
+		return Unchanged, nil
+	case len(incomingSegments) <= len(localSegments) && (relation == historiesEqual || relation == localAhead):
+		keepLast()
+		return KeptNewer, nil
+	case len(incomingSegments) >= len(localSegments) && relation == incomingAhead:
+		records := incomingSegments[last][len(localSegments[last]):]
+		plan.keep(chain[last], incoming[last], local[last], records)
+	case len(incomingSegments) > len(localSegments) && relation == historiesEqual:
+		keepLast()
+	case relation == historiesDiverged && replace && thread == session.root && len(chain) == 1 && len(local) == 1:
+		plan.files[chain[0]] = filePlan{step: stepReplace, path: stored.active[0]}
+		return Replaced, nil
+	case relation == historiesDiverged && thread == session.root:
+		return "", fmt.Errorf("session %s has diverged from the archive; pass --replace to overwrite the local copy", thread)
+	default:
+		return "", fmt.Errorf("thread %s has diverged from the archive; delete it in Codex and import again", thread)
+	}
+	for _, index := range chain[common:] {
+		plan.files[index] = filePlan{step: stepReplay}
+	}
+	return Updated, nil
+}
+
+// keep plans to leave a local object as it is, or to append records to it,
+// and records it as the counterpart of the archived object.
+func (p *sessionPlan) keep(index int, incoming, local rolloutFile, records []byte) {
+	step := stepKeep
+	if len(records) > 0 {
+		step = stepAppend
+	}
+	p.files[index] = filePlan{step: step, path: local.location, records: records}
+	p.objects[incoming.object] = localObject{object: local.object, data: append(append([]byte{}, local.data...), records...), from: incoming.data}
+}
+
+// localChain reads the local objects of a thread in chain order: the original
+// rollout first, then each snapshot that references the previous object.
+func (s *Store) localChain(stored storedSession) ([]rolloutFile, error) {
+	original, err := readRolloutFile(stored.active[0])
+	if err != nil {
+		return nil, err
+	}
+	original.location = stored.active[0]
+	snapshots := map[string]rolloutFile{}
+	for _, path := range stored.snapshots {
+		snapshot, err := readRolloutFile(path)
 		if err != nil {
 			return nil, err
 		}
-		switch {
-		case len(stored.pending) > 0:
-			return nil, fmt.Errorf("ancestor session %s has an interrupted replacement; import that session first", ancestor.meta.ID)
-		case len(stored.archived) > 0 || len(stored.snapshots) > 0 || len(stored.active) > 1:
-			return nil, fmt.Errorf("ancestor session %s exists locally as an archived, reverted, or duplicated thread; restore it in Codex first", ancestor.meta.ID)
-		case len(stored.active) == 1:
-			local, err := readStable(stored.active[0])
+		snapshot.location = path
+		snapshots[snapshot.meta.Base.ObjectID] = snapshot
+	}
+	chain := []rolloutFile{original}
+	for len(snapshots) > 0 {
+		next, ok := snapshots[chain[len(chain)-1].object]
+		if !ok {
+			return nil, fmt.Errorf("thread %s has snapshots that do not form one revert chain", original.meta.ID)
+		}
+		delete(snapshots, chain[len(chain)-1].object)
+		chain = append(chain, next)
+	}
+	return chain, nil
+}
+
+// segments returns the comparable parts of a thread's objects: the whole
+// original rollout, then the records each snapshot holds after its header.
+func (s *Store) segments(chain []rolloutFile) ([][]byte, error) {
+	segments := [][]byte{chain[0].data}
+	for _, snapshot := range chain[1:] {
+		continuation, err := s.layout.snapshotContinuation(snapshot)
+		if err != nil {
+			return nil, err
+		}
+		segments = append(segments, continuation)
+	}
+	return segments, nil
+}
+
+// pointAtLocalObjects rewrites the reference of an archived original rollout
+// to the local counterpart of the object it references, if that differs.
+func (s *Store) pointAtLocalObjects(file rolloutFile, objects map[string]localObject) (rolloutFile, error) {
+	base := file.meta.Base
+	if base == nil {
+		return file, nil
+	}
+	target, ok := objects[base.ObjectID]
+	if !ok {
+		return file, nil
+	}
+	offset, err := target.moved(base.EndByteOffset)
+	if err != nil {
+		return rolloutFile{}, fmt.Errorf("%s: %w", file.name, err)
+	}
+	if target.object == base.ObjectID && offset == base.EndByteOffset {
+		return file, nil
+	}
+	data, err := rewriteBase(file.data, *base, target.object, offset)
+	if err != nil {
+		return rolloutFile{}, fmt.Errorf("%s: %w", file.name, err)
+	}
+	return newRolloutFile(file.name, data)
+}
+
+// executePlan performs a session plan in archive order, so every referenced
+// object exists locally before the objects that reference it, then verifies
+// the session.
+func (s *Store) executePlan(client *appserver.Client, session codexSession, plan sessionPlan) error {
+	for index, file := range session.files {
+		step := plan.files[index]
+		switch step.step {
+		case stepKeep:
+		case stepAppend:
+			if err := appendRecords(s.home, file.meta.ID, step.path, step.records); err != nil {
+				return err
+			}
+		case stepPlace:
+			placed, err := s.pointAtLocalObjects(file, plan.objects)
 			if err != nil {
-				return nil, fmt.Errorf("read ancestor session %s: %w", ancestor.meta.ID, err)
+				return err
 			}
-			if bytes.HasPrefix(local, ancestor.data) {
-				continue
+			if err := s.placeRollout(step.path, placed.data); err != nil {
+				return fmt.Errorf("place thread %s: %w", file.meta.ID, err)
 			}
-			if localMeta, err := parseRollout(local); err == nil && localMeta.CWD != ancestor.meta.CWD {
-				return nil, fmt.Errorf("ancestor session %s exists in %s; import the fork there with --cwd", ancestor.meta.ID, localMeta.CWD)
-			}
-			return nil, fmt.Errorf("ancestor session %s differs locally from the history in the archive", ancestor.meta.ID)
-		default:
-			path, err := activeRolloutPath(s.home, ancestor.name)
+			plan.objects[file.object] = localObject{object: placed.object, data: placed.data, from: file.data}
+		case stepReplay:
+			replayed, err := s.replayRevert(session, file, plan.objects)
 			if err != nil {
-				return nil, err
+				return fmt.Errorf("replay revert of thread %s: %w", file.meta.ID, err)
 			}
-			placements = append(placements, ancestorPlacement{path: path, data: ancestor.data})
+			plan.objects[file.object] = replayed
+		case stepReplace:
+			if err := s.replaceExisting(client, step.path, file); err != nil {
+				return err
+			}
+			return nil
 		}
 	}
-	return placements, nil
+	if err := s.verifyImportedSession(client, session, plan); err != nil {
+		if plan.files[0].step == stepPlace && len(session.files) == 1 {
+			if cleanupErr := client.Delete(session.root); cleanupErr != nil {
+				return fmt.Errorf("verify imported session: %w; cleanup also failed: %v", err, cleanupErr)
+			}
+		}
+		return fmt.Errorf("verify imported session: %w", err)
+	}
+	return nil
 }
 
-// importDestination returns the rollout path an import writes: the path of an
-// interrupted write, the existing active rollout, or the native file name in
-// the active store.
-func importDestination(stored storedSession, home, name string) (string, error) {
-	switch {
-	case len(stored.pending) > 1:
-		return "", fmt.Errorf("session has several interrupted writes: %s", strings.Join(stored.pending, ", "))
-	case len(stored.pending) == 1:
-		return stored.pending[0], nil
-	case len(stored.active) == 1:
-		return stored.active[0], nil
-	default:
-		return activeRolloutPath(home, name)
+// replayRevert asks Codex to revert a thread the way the archived snapshot
+// did, then appends the records the snapshot holds after its header. The
+// replayed snapshot is Codex's own, so Codex locates it as the thread's
+// current history.
+func (s *Store) replayRevert(session codexSession, snapshot rolloutFile, objects map[string]localObject) (localObject, error) {
+	thread := snapshot.meta.ID
+	base := *snapshot.meta.Base
+	target, ok := objects[base.ObjectID]
+	if !ok {
+		return localObject{}, fmt.Errorf("reverted rollout %s is not available locally", base.ObjectID)
 	}
+	offset, err := target.moved(base.EndByteOffset)
+	if err != nil {
+		return localObject{}, err
+	}
+	turn, err := revertedTurn(rolloutFile{data: target.data}, historyBase{ObjectID: target.object, EndOrdinalExclusive: base.EndOrdinalExclusive, EndByteOffset: offset})
+	if err != nil {
+		return localObject{}, err
+	}
+	if err := requireClosed(s.home, thread); err != nil {
+		return localObject{}, err
+	}
+	before, err := findSession(s.home, thread)
+	if err != nil {
+		return localObject{}, err
+	}
+	loader, err := appserver.Start(s.ctx, s.binary, s.home, safeLoadArguments...)
+	if err != nil {
+		return localObject{}, fmt.Errorf("start Codex App Server to replay a revert: %w", err)
+	}
+	err = s.loadThreads(loader, session, thread)
+	if err == nil {
+		err = loader.Revert(thread, turn)
+	}
+	loader.Close()
+	if err != nil {
+		return localObject{}, err
+	}
+	after, err := findSession(s.home, thread)
+	if err != nil {
+		return localObject{}, err
+	}
+	created := newPaths(before.snapshots, after.snapshots)
+	if len(created) != 1 {
+		return localObject{}, fmt.Errorf("Codex wrote %d snapshots for the revert, want 1", len(created))
+	}
+	native, err := readRolloutFile(created[0])
+	if err != nil {
+		return localObject{}, err
+	}
+	if err := s.requireRevertHeader(native, snapshot); err != nil {
+		return localObject{}, err
+	}
+	continuation, err := s.layout.snapshotContinuation(snapshot)
+	if err != nil {
+		return localObject{}, err
+	}
+	if len(continuation) > 0 {
+		if err := appendRecords(s.home, thread, created[0], continuation); err != nil {
+			return localObject{}, err
+		}
+	}
+	return localObject{object: native.object, data: append(native.data, continuation...), from: snapshot.data}, nil
 }
 
-// planImport decides how to import the session rollout without changing local
-// state.
-func (s *Store) planImport(stored storedSession, destination string, session rolloutFile, replace bool) (ImportOutcome, error) {
-	id := session.meta.ID
-	if len(stored.archived) > 0 {
-		return "", fmt.Errorf("session %s is archived at %s; restore or delete it in Codex before importing it", id, strings.Join(stored.archived, ", "))
-	}
-	if len(stored.snapshots) > 0 {
-		return "", fmt.Errorf("session %s has been reverted locally; reverted Codex threads are not supported", id)
-	}
-	if len(stored.active) == 0 {
-		return Imported, nil
-	}
-	if len(stored.active) > 1 || filepath.Clean(stored.active[0]) != filepath.Clean(destination) {
-		return "", fmt.Errorf("session %s has several rollouts: %s", id, strings.Join(stored.active, ", "))
-	}
-	local, err := readStable(destination)
+// requireRevertHeader checks that Codex's replayed snapshot consists of
+// exactly a revert header with the same records as the archived snapshot's.
+func (s *Store) requireRevertHeader(native, archived rolloutFile) error {
+	nativeKinds, err := recordKinds(native.data)
 	if err != nil {
-		return "", fmt.Errorf("read existing session %s: %w", id, err)
+		return err
 	}
-	localMeta, err := parseRollout(local)
+	archivedKinds, err := recordKinds(archived.data)
 	if err != nil {
-		return "", fmt.Errorf("read existing session %s: %w", id, err)
+		return err
 	}
-	var localTurns turnState
-	if err := s.layout.advanceTurns(&localTurns, local); err != nil || localTurns.open {
-		return "", fmt.Errorf("existing session %s has a turn in progress", id)
+	if len(nativeKinds) != s.layout.revertHeaderRecords || len(archivedKinds) < len(nativeKinds) {
+		return fmt.Errorf("Codex wrote a revert header of %d records, want %d", len(nativeKinds), s.layout.revertHeaderRecords)
 	}
-	if localMeta.CWD != session.meta.CWD && !replace {
-		return "", fmt.Errorf("session %s already exists in %s; import there with --cwd, or pass --replace", id, localMeta.CWD)
+	for index, kind := range nativeKinds {
+		if archivedKinds[index] != kind {
+			return errors.New("Codex wrote a different revert header than the archived snapshot")
+		}
 	}
-	switch compareHistories(local, session.data) {
-	case historiesEqual:
-		return Unchanged, nil
-	case incomingAhead:
-		return Updated, nil
-	case localAhead:
-		return KeptNewer, nil
+	return nil
+}
+
+func recordKinds(data []byte) ([]eventKind, error) {
+	var kinds []eventKind
+	for line := range bytes.Lines(data) {
+		kind, err := classifyEvent(line)
+		if err != nil {
+			return nil, err
+		}
+		kinds = append(kinds, kind)
 	}
-	if !replace {
-		return "", fmt.Errorf("session %s has diverged from the archive; pass --replace to overwrite the local copy", id)
+	return kinds, nil
+}
+
+func newPaths(before, after []string) []string {
+	known := map[string]bool{}
+	for _, path := range before {
+		known[path] = true
 	}
-	return Replaced, nil
+	var created []string
+	for _, path := range after {
+		if !known[path] {
+			created = append(created, path)
+		}
+	}
+	return created
+}
+
+// loadThreads resumes the session's threads in archive order up to and
+// including last, so every fork's ancestors are loaded before it. Spawned
+// threads load through their parent and are skipped.
+func (s *Store) loadThreads(loader *appserver.Client, session codexSession, last string) error {
+	for _, thread := range session.threads() {
+		head := session.head(thread)
+		if head.meta.SessionID == session.root && thread != session.root {
+			continue
+		}
+		if _, err := loader.Resume(thread, ""); err != nil {
+			return fmt.Errorf("load thread %s: %w", thread, err)
+		}
+		if thread == last {
+			return nil
+		}
+	}
+	return nil
 }
 
 // historyComparison relates two copies of an append-only history.
@@ -256,22 +596,6 @@ func compareHistories(local, incoming []byte) historyComparison {
 	default:
 		return historiesDiverged
 	}
-}
-
-// placeNew places the rollout of a new session and verifies its repair. A
-// failed verification deletes the new session again; placed ancestors remain,
-// since they are complete sessions of their own.
-func (s *Store) placeNew(client *appserver.Client, destination string, session rolloutFile) error {
-	if err := s.placeRollout(destination, session.data); err != nil {
-		return err
-	}
-	if err := s.verifySession(client, destination, session.meta); err != nil {
-		if cleanupErr := client.Delete(session.meta.ID); cleanupErr != nil {
-			return fmt.Errorf("repair imported session: %w; cleanup also failed: %v", err, cleanupErr)
-		}
-		return fmt.Errorf("repair imported session: %w", err)
-	}
-	return nil
 }
 
 // replaceExisting replaces a quiescent local session through the recoverable
@@ -325,14 +649,10 @@ func (s *Store) placeRollout(destination string, rollout []byte) error {
 	return syncDirectory(directory)
 }
 
-// verifySession lets Codex scan and repair the session whose rollout is at
-// destination, then checks the result. A self-contained session must appear in
-// the scan, the persisted state, and a thread read with the target workspace.
-// A fork is verified by loading its history; see verifyFork.
-func (s *Store) verifySession(client *appserver.Client, destination string, meta sessionMeta) error {
-	if meta.Base != nil {
-		return s.verifyFork(client, destination, meta)
-	}
+// verifySession lets Codex scan and repair a self-contained thread, then
+// requires the scan, the persisted state, and a thread read to report it in
+// its workspace.
+func (s *Store) verifySession(client *appserver.Client, _ string, meta sessionMeta) error {
 	threads, err := client.List(appserver.ListQuery{SourceKinds: allSources})
 	if err != nil {
 		return err
@@ -359,31 +679,48 @@ func (s *Store) verifySession(client *appserver.Client, destination string, meta
 	return nil
 }
 
-// verifyFork verifies a forked session. Codex lists a fork only once it has
-// turns of its own, and builds a fork's turns only after loading its
-// ancestors, so the history is loaded root first in a separate App Server
-// that cannot start turns, hooks, or automations. The session must then
-// replay every turn of its history.
-func (s *Store) verifyFork(client *appserver.Client, destination string, meta sessionMeta) error {
-	if _, err := client.List(appserver.ListQuery{SourceKinds: allSources}); err != nil {
-		return err
+// verifyImportedSession checks the result of an import. A session of one
+// self-contained thread must appear with the target workspace in the scan, the
+// persisted state, and a thread read. Otherwise Codex lists a fork only once it
+// has turns of its own, builds a fork's turns only after loading its
+// ancestors, and loads spawned threads through their parent, so the session is
+// loaded in order in a separate App Server that cannot start turns, hooks, or
+// automations: the root thread must replay every turn, and every spawned
+// thread must be readable in its workspace.
+func (s *Store) verifyImportedSession(client *appserver.Client, session codexSession, plan sessionPlan) error {
+	root := session.head(session.root)
+	if len(session.files) == 1 && root.meta.Base == nil {
+		return s.verifySession(client, plan.files[0].path, root.meta)
 	}
-	local, err := s.layout.readHistory(s.home, destination)
-	if err != nil {
+	if _, err := client.List(appserver.ListQuery{SourceKinds: allSources}); err != nil {
 		return err
 	}
 	loader, err := appserver.Start(s.ctx, s.binary, s.home, safeLoadArguments...)
 	if err != nil {
-		return fmt.Errorf("start Codex App Server to load the session history: %w", err)
+		return fmt.Errorf("start Codex App Server to load the session: %w", err)
 	}
 	defer loader.Close()
-	for index, file := range local.files {
-		thread, err := loader.Resume(file.meta.ID, "")
-		if err != nil {
-			return fmt.Errorf("load session %s: %w", file.meta.ID, err)
+	if err := s.loadThreads(loader, session, ""); err != nil {
+		return err
+	}
+	loaded, err := loader.Resume(session.root, "")
+	if err != nil {
+		return err
+	}
+	if len(loaded.Turns) != session.turns || loaded.CWD != root.meta.CWD {
+		return fmt.Errorf("loaded session has %d turns in %q, want %d turns in %q", len(loaded.Turns), loaded.CWD, session.turns, root.meta.CWD)
+	}
+	for _, thread := range session.threads() {
+		head := session.head(thread)
+		if thread == session.root || head.meta.SessionID != session.root {
+			continue
 		}
-		if index == len(local.files)-1 && (len(thread.Turns) != local.turns || thread.CWD != meta.CWD) {
-			return fmt.Errorf("loaded session has %d turns in %q, want %d turns in %q", len(thread.Turns), thread.CWD, local.turns, meta.CWD)
+		read, err := client.Read(thread)
+		if err != nil {
+			return fmt.Errorf("read spawned thread %s: %w", thread, err)
+		}
+		if read.CWD != head.meta.CWD {
+			return fmt.Errorf("spawned thread %s has workspace %q, want %q", thread, read.CWD, head.meta.CWD)
 		}
 	}
 	return nil

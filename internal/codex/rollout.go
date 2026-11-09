@@ -14,7 +14,10 @@ import (
 
 // sessionMeta is the identity recorded in a rollout's first event.
 type sessionMeta struct {
+	// ID is the thread, and SessionID the session whose root thread spawned it;
+	// they are equal for a session's root thread.
 	ID        string
+	SessionID string
 	CWD       string
 	Timestamp time.Time
 	// Base is the ancestor prefix a forked rollout extends, or nil for a
@@ -79,20 +82,21 @@ func parseRollout(data []byte) (sessionMeta, error) {
 	if first.Type != "session_meta" {
 		return sessionMeta{}, fmt.Errorf("first rollout event has type %q, want session_meta", first.Type)
 	}
-	if first.Payload.ID != "" && first.Payload.SessionID != "" && first.Payload.ID != first.Payload.SessionID {
-		return sessionMeta{}, errors.New("rollout belongs to another session, such as a multi-agent child thread; this layout is not supported")
-	}
-	id := first.Payload.SessionID
+	id := first.Payload.ID
 	if id == "" {
-		id = first.Payload.ID
+		id = first.Payload.SessionID
+	}
+	sessionID := first.Payload.SessionID
+	if sessionID == "" {
+		sessionID = id
 	}
 	if id == "" || first.Payload.CWD == "" || first.Payload.Timestamp == "" {
 		return sessionMeta{}, errors.New("session metadata is missing id, cwd, or timestamp")
 	}
-	if !validSessionID(id) {
+	if !validSessionID(id) || !validSessionID(sessionID) {
 		return sessionMeta{}, fmt.Errorf("session ID %q is not a UUIDv7", id)
 	}
-	if base := first.Payload.HistoryBase; base != nil && (!validSessionID(base.ThreadID) || base.EndByteOffset <= 0 || base.EndOrdinalExclusive <= 0) {
+	if base := first.Payload.HistoryBase; base != nil && (!validSessionID(base.ObjectID) || base.EndByteOffset <= 0 || base.EndOrdinalExclusive <= 0) {
 		return sessionMeta{}, errors.New("session metadata has an invalid history_base reference")
 	}
 	timestamp, err := time.Parse(time.RFC3339Nano, first.Payload.Timestamp)
@@ -107,7 +111,7 @@ func parseRollout(data []byte) (sessionMeta, error) {
 			return sessionMeta{}, fmt.Errorf("rollout line %d is not valid JSON", index+2)
 		}
 	}
-	return sessionMeta{ID: id, CWD: first.Payload.CWD, Timestamp: timestamp, Base: first.Payload.HistoryBase}, nil
+	return sessionMeta{ID: id, SessionID: sessionID, CWD: first.Payload.CWD, Timestamp: timestamp, Base: first.Payload.HistoryBase}, nil
 }
 
 // advanceTurns applies the turn boundaries in the records after a rollout's
@@ -243,6 +247,8 @@ type storedSession struct {
 	pending []string
 	// snapshots are rollouts Codex writes when a thread is reverted.
 	snapshots []string
+	// appending are rollouts with the marker of an interrupted append.
+	appending []string
 }
 
 // findSession searches the active and archived Codex stores for the files of
@@ -277,6 +283,8 @@ func findSession(home, sessionID string) (storedSession, error) {
 				found.pending = appendUnique(found.pending, strings.TrimSuffix(path, rollbackSuffix))
 			case strings.HasSuffix(name, suffix+stageSuffix):
 				found.pending = appendUnique(found.pending, strings.TrimSuffix(path, stageSuffix))
+			case strings.HasSuffix(name, appendSuffix):
+				found.appending = appendUnique(found.appending, strings.TrimSuffix(path, appendSuffix))
 			case strings.Contains(name, snapshotPrefix) && strings.HasSuffix(name, ".jsonl"):
 				found.snapshots = append(found.snapshots, path)
 			}

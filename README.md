@@ -35,7 +35,7 @@ Importing a session that already exists is safe to repeat: a longer archive upda
 
 An archive contains the session's recorded history and nothing else. Project files, uncommitted changes, credentials, running processes, and tool state stay on the source machine, so check out the same code before resuming. Archives can contain prompts, command output, file contents, and secrets printed during the session: treat them as sensitive.
 
-A forked session travels with the part of each ancestor session it continues. Reverted sessions and multi-agent child threads are rejected rather than exported incompletely.
+A session travels whole: the sub-agent threads it spawned, the reverts it went through, and the part of each session it was forked from. Close a session in Codex before importing a newer copy of it; agent-teleport refuses to change a session that Codex has open.
 
 ## Development
 

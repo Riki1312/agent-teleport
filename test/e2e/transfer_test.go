@@ -64,6 +64,16 @@ func TestTwoHomeTransfer(t *testing.T) {
 		"import", shortPath, "--cwd", targetAlias), "imported")
 	assertListedCWD(t, run(t, binary, codexPath, targetHome, nil, true,
 		"list", "--all", "--json"), fixture.ID, targetCWD)
+	openSession, err := appserver.Start(context.Background(), codexPath, targetHome)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := openSession.Resume(fixture.ID, ""); err != nil {
+		t.Fatalf("open session: %v", err)
+	}
+	run(t, binary, codexPath, targetHome, nil, false,
+		"import", archivePath, "--cwd", targetCWD)
+	openSession.Close()
 	assertOutput(t, run(t, binary, codexPath, targetHome, nil, true,
 		"import", archivePath, "--cwd", targetCWD), "updated")
 	assertOutput(t, run(t, binary, codexPath, targetHome, nil, true,
@@ -118,12 +128,14 @@ func TestTwoHomeTransfer(t *testing.T) {
 		"import", forkArchivePath, "--cwd", forkCWD), "imported")
 	assertOutput(t, run(t, binary, codexPath, forkHome, nil, true,
 		"import", forkArchivePath, "--cwd", forkCWD), "already up to date")
-	assertResumed(t, codexPath, forkHome, forkID, forkCWD, fixture)
+	assertResumed(t, codexPath, forkHome, forkID, forkCWD, fixtureTurns(fixture.Data))
 	run(t, binary, codexPath, forkHome, nil, false,
 		"import", forkArchivePath, "--cwd", pipeCWD, "--replace")
 	assertOutput(t, run(t, binary, codexPath, targetHome, nil, true,
 		"import", forkArchivePath, "--cwd", replacementCWD), "imported")
-	assertResumed(t, codexPath, targetHome, forkID, replacementCWD, fixture)
+	assertResumed(t, codexPath, targetHome, forkID, replacementCWD, fixtureTurns(fixture.Data))
+
+	transferRevertedMultiAgentSession(t, binary, codexPath, work)
 
 	client, err := appserver.Start(context.Background(), codexPath, targetHome)
 	if err != nil {
@@ -182,9 +194,9 @@ func decodeArchive(t *testing.T, path string) archive.Archive {
 	return decoded
 }
 
-// assertResumed resumes sessionID in an isolated App Server and requires every
-// turn of the fixture history in workspace.
-func assertResumed(t *testing.T, codexPath, home, sessionID, workspace string, fixture rolloutFixture) {
+// assertResumed resumes sessionID in an isolated App Server and requires
+// wantTurns turns in workspace.
+func assertResumed(t *testing.T, codexPath, home, sessionID, workspace string, wantTurns int) {
 	t.Helper()
 	client, err := appserver.Start(context.Background(), codexPath, home)
 	if err != nil {
@@ -195,9 +207,81 @@ func assertResumed(t *testing.T, codexPath, home, sessionID, workspace string, f
 	if err != nil {
 		t.Fatalf("resume %s: %v", sessionID, err)
 	}
-	want := bytes.Count(fixture.Data, []byte(`"type":"task_started"`))
-	if resumed.CWD != workspace || len(resumed.Turns) != want {
-		t.Fatalf("resumed %s has %d turns in %q, want %d in %q", sessionID, len(resumed.Turns), resumed.CWD, want, workspace)
+	if resumed.CWD != workspace || len(resumed.Turns) != wantTurns {
+		t.Fatalf("resumed %s has %d turns in %q, want %d in %q", sessionID, len(resumed.Turns), resumed.CWD, wantTurns, workspace)
+	}
+}
+
+func fixtureTurns(rollout []byte) int {
+	return bytes.Count(rollout, []byte(`"type":"task_started"`))
+}
+
+// transferRevertedMultiAgentSession seeds a session whose root thread spawned
+// a sub-agent and was reverted, then moves it to a fresh home.
+func transferRevertedMultiAgentSession(t *testing.T, binary, codexPath, work string) {
+	t.Helper()
+	const (
+		root      = "01a1c03e-3fe4-7502-a037-4d6415a7ea24"
+		child     = "01a1c03e-5302-7d83-83a8-dd5225e920ad"
+		wantTurns = 3
+	)
+	names := []string{
+		"rollout-2026-11-09T13-17-48-01a1c03e-3fe4-7502-a037-4d6415a7ea24.jsonl",
+		"rollout-2026-11-09T13-18-31-01a1c03e-3fe4-7502-a037-4d6415a7ea24_01a1c03e-eae4-79c1-89ce-3116151361ce.jsonl",
+		"rollout-2026-11-09T13-17-52-01a1c03e-5302-7d83-83a8-dd5225e920ad.jsonl",
+	}
+	var payloads []archive.Payload
+	for _, name := range names {
+		data, err := os.ReadFile(filepath.Join(moduleRoot(t), "testdata", "codex", "multi-agent", name))
+		if err != nil {
+			t.Fatal(err)
+		}
+		payloads = append(payloads, archive.Payload{Path: name, Data: data})
+	}
+	seed, err := archive.New(archive.Header{
+		Provider:        codex.Provider,
+		ProviderVersion: "0.167.0",
+		SessionID:       root,
+		Workspace:       "/workspace/source",
+		CreatedAt:       time.Now(),
+	}, payloads)
+	if err != nil {
+		t.Fatal(err)
+	}
+	seedPath := filepath.Join(work, "multi-agent-seed"+archive.Extension)
+	if err := seed.WriteFile(seedPath); err != nil {
+		t.Fatal(err)
+	}
+
+	sourceHome := mkdir(t, filepath.Join(work, "multi-agent-source-home"))
+	sourceCWD := mkdir(t, filepath.Join(work, "multi-agent-source"))
+	assertOutput(t, run(t, binary, codexPath, sourceHome, nil, true,
+		"import", seedPath, "--cwd", sourceCWD), "imported")
+	assertResumed(t, codexPath, sourceHome, root, sourceCWD, wantTurns)
+
+	exportPath := filepath.Join(work, "multi-agent"+archive.Extension)
+	run(t, binary, codexPath, sourceHome, nil, true,
+		"export", "--all", root, "-o", exportPath)
+	if files := len(decodeArchive(t, exportPath).Manifest.Files); files != 3 {
+		t.Fatalf("multi-agent archive has %d files, want the original, the snapshot, and the child", files)
+	}
+
+	targetHome := mkdir(t, filepath.Join(work, "multi-agent-target-home"))
+	targetCWD := mkdir(t, filepath.Join(work, "multi-agent-target-with-a-longer-name"))
+	assertOutput(t, run(t, binary, codexPath, targetHome, nil, true,
+		"import", exportPath, "--cwd", targetCWD), "imported")
+	assertOutput(t, run(t, binary, codexPath, targetHome, nil, true,
+		"import", exportPath, "--cwd", targetCWD), "already up to date")
+	assertResumed(t, codexPath, targetHome, root, targetCWD, wantTurns)
+
+	client, err := appserver.Start(context.Background(), codexPath, targetHome)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer client.Close()
+	read, err := client.Read(child)
+	if err != nil || read.CWD != targetCWD {
+		t.Fatalf("read spawned thread: %+v, %v", read, err)
 	}
 }
 

@@ -220,18 +220,18 @@ func TestValidateRolloutHistoryBase(t *testing.T) {
 	}
 }
 
-func TestValidateRolloutThreadAndSessionIDs(t *testing.T) {
+func TestParseRolloutThreadAndSessionIDs(t *testing.T) {
+	const otherSession = "01999999-3333-7777-8888-444444444444"
 	for _, test := range []struct {
-		name      string
-		threadID  string
-		sessionID string
-		wantError bool
+		name          string
+		threadID      string
+		sessionID     string
+		wantSessionID string
 	}{
-		{name: "thread ID only", threadID: testSessionID},
-		{name: "legacy session ID only", sessionID: testSessionID},
-		{name: "matching IDs", threadID: testSessionID, sessionID: testSessionID},
-		{name: "different IDs", threadID: testSessionID,
-			sessionID: "01999999-3333-7777-8888-444444444444", wantError: true},
+		{name: "thread ID only", threadID: testSessionID, wantSessionID: testSessionID},
+		{name: "legacy session ID only", sessionID: testSessionID, wantSessionID: testSessionID},
+		{name: "matching IDs", threadID: testSessionID, sessionID: testSessionID, wantSessionID: testSessionID},
+		{name: "spawned thread", threadID: testSessionID, sessionID: otherSession, wantSessionID: otherSession},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			first, rest, _ := bytes.Cut(fixtureRollout("/source/workspace"), []byte{'\n'})
@@ -251,14 +251,13 @@ func TestValidateRolloutThreadAndSessionIDs(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			source := append(append(header, '\n'), rest...)
-			meta, err := testLayout.validateRollout(source)
-			if test.wantError {
-				if err == nil || !strings.Contains(err.Error(), "another session") {
-					t.Fatalf("ambiguous thread identity must fail closed, got %v", err)
-				}
-			} else if err != nil || meta.ID != testSessionID {
-				t.Fatalf("ValidateRollout() = %#v, %v; want session %s", meta, err, testSessionID)
+
+			// when
+			meta, err := parseRollout(append(append(header, '\n'), rest...))
+
+			// then
+			if err != nil || meta.ID != testSessionID || meta.SessionID != test.wantSessionID {
+				t.Fatalf("parseRollout() = %#v, %v", meta, err)
 			}
 		})
 	}

@@ -14,6 +14,7 @@ import (
 	"fmt"
 	"os"
 	"os/user"
+	"path/filepath"
 	"strings"
 )
 
@@ -25,62 +26,117 @@ const (
 )
 
 func main() {
-	var inputPath, outputPath string
-	flag.StringVar(&inputPath, "input", "", "source rollout JSONL")
-	flag.StringVar(&outputPath, "output", "", "sanitized fixture JSONL")
+	outputDirectory := flag.String("output", "", "directory for the sanitized rollouts, which keep their file names")
 	flag.Parse()
-	if inputPath == "" || outputPath == "" {
-		fail(errors.New("-input and -output are required"))
+	if *outputDirectory == "" || flag.NArg() == 0 {
+		fail(errors.New("usage: sanitize-fixture -output DIR ROLLOUT..."))
 	}
-	if err := run(inputPath, outputPath); err != nil {
+	if err := run(flag.Args(), *outputDirectory); err != nil {
 		fail(err)
 	}
 }
 
-func run(inputPath, outputPath string) error {
-	data, err := os.ReadFile(inputPath)
-	if err != nil {
-		return err
-	}
+// run sanitizes rollouts that may reference each other through history_base.
+// Sanitizing changes record lengths, so every reference is moved to the same
+// record boundary of the sanitized target; references must point at rollouts
+// listed earlier.
+func run(inputs []string, outputDirectory string) error {
 	home, err := os.UserHomeDir()
 	if err != nil {
 		return err
 	}
 	var sanitizer *sanitizer
-	var output bytes.Buffer
-	encoder := json.NewEncoder(&output)
-	encoder.SetEscapeHTML(false)
-	scanner := bufio.NewScanner(bytes.NewReader(data))
-	scanner.Buffer(make([]byte, 64<<10), 64<<20)
-	lastType := ""
-	for scanner.Scan() {
-		var event map[string]any
-		if err := json.Unmarshal(scanner.Bytes(), &event); err != nil {
+	boundaries := map[string][2][]int64{}
+	outputs := map[string][]byte{}
+	for _, input := range inputs {
+		data, err := os.ReadFile(input)
+		if err != nil {
 			return err
 		}
-		if sanitizer == nil {
-			workspace, _ := event["payload"].(map[string]any)["cwd"].(string)
-			if workspace == "" {
-				return errors.New("first event has no workspace")
+		var output bytes.Buffer
+		encoder := json.NewEncoder(&output)
+		encoder.SetEscapeHTML(false)
+		scanner := bufio.NewScanner(bytes.NewReader(data))
+		scanner.Buffer(make([]byte, 64<<10), 64<<20)
+		for first := true; scanner.Scan(); first = false {
+			var event map[string]any
+			if err := json.Unmarshal(scanner.Bytes(), &event); err != nil {
+				return fmt.Errorf("%s: %w", input, err)
 			}
-			sanitizer = newSanitizer(workspace, home)
+			if first {
+				payload, _ := event["payload"].(map[string]any)
+				if sanitizer == nil {
+					workspace, _ := payload["cwd"].(string)
+					if workspace == "" {
+						return errors.New("first event has no workspace")
+					}
+					sanitizer = newSanitizer(workspace, home)
+				}
+				if err := moveReference(payload, boundaries); err != nil {
+					return fmt.Errorf("%s: %w", input, err)
+				}
+			}
+			if err := encoder.Encode(sanitizer.value(event, "")); err != nil {
+				return err
+			}
 		}
-		event = sanitizer.value(event, "").(map[string]any)
-		if err := encoder.Encode(event); err != nil {
+		if err := scanner.Err(); err != nil {
 			return err
 		}
-		lastType = eventType(event)
+		if err := sanitizer.requireClean(output.Bytes()); err != nil {
+			return fmt.Errorf("%s: %w", input, err)
+		}
+		boundaries[objectID(input)] = [2][]int64{recordEnds(data), recordEnds(output.Bytes())}
+		outputs[filepath.Base(input)] = output.Bytes()
 	}
-	if err := scanner.Err(); err != nil {
-		return err
+	for name, data := range outputs {
+		if err := os.WriteFile(filepath.Join(outputDirectory, name), data, 0o600); err != nil {
+			return err
+		}
 	}
-	if lastType != "event_msg/task_complete" && lastType != "event_msg/thread_settings_applied" {
-		return errors.New("source does not end after a completed turn")
+	return nil
+}
+
+// moveReference moves a history_base byte offset to the same record boundary
+// of the sanitized rollout it references.
+func moveReference(payload map[string]any, boundaries map[string][2][]int64) error {
+	base, ok := payload["history_base"].(map[string]any)
+	if !ok {
+		return nil
 	}
-	if err := sanitizer.requireClean(output.Bytes()); err != nil {
-		return err
+	object, _ := base["thread_id"].(string)
+	offset, _ := base["end_byte_offset"].(float64)
+	ends, ok := boundaries[object]
+	if !ok {
+		return fmt.Errorf("history_base references %s, which must be listed earlier", object)
 	}
-	return os.WriteFile(outputPath, output.Bytes(), 0o600)
+	for index, end := range ends[0] {
+		if end == int64(offset) {
+			base["end_byte_offset"] = ends[1][index]
+			return nil
+		}
+	}
+	return errors.New("history_base does not end at a record boundary")
+}
+
+// objectID returns the rollout object a native file name records: the
+// snapshot UUID when present, otherwise the thread ID.
+func objectID(path string) string {
+	name := strings.TrimSuffix(filepath.Base(path), ".jsonl")
+	if index := strings.LastIndex(name, "_"); index >= 0 {
+		return name[index+1:]
+	}
+	return name[len(name)-36:]
+}
+
+func recordEnds(data []byte) []int64 {
+	var ends []int64
+	for index, character := range data {
+		if character == '\n' {
+			ends = append(ends, int64(index+1))
+		}
+	}
+	return ends
 }
 
 // sanitizer replaces private values in decoded rollout events.
@@ -184,13 +240,6 @@ func onlyStrings(values map[string]any) bool {
 		}
 	}
 	return true
-}
-
-func eventType(event map[string]any) string {
-	top, _ := event["type"].(string)
-	payload, _ := event["payload"].(map[string]any)
-	inner, _ := payload["type"].(string)
-	return top + "/" + inner
 }
 
 func fail(err error) {

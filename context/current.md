@@ -16,8 +16,8 @@
 - Workspace remapping rewrites every boundary-delimited mention of the workspace in metadata events and preserves all other bytes; remapping there and back is the identity on the native fixture.
 - Collision checks cover active and archived Codex sessions.
 - CI runs golangci-lint (doc comments required), Prettier, and the Go tests on Linux and macOS, with the required two-home E2E test against Codex 0.165.0, 0.166.0, and 0.167.0. `make check` runs the same checks locally.
-- Forks are exported with their ancestor prefixes and verified by loading their history in a safe App Server; reverted threads and multi-agent children are rejected.
-- The fixtures in `testdata/codex` are a sanitized Codex 0.167.0 rollout from a throwaway home and a native fork of it.
+- Whole sessions transfer: sub-agent threads, forks with their ancestor prefixes, and reverts, which import replays through `thread/revert`. Updates append records under Codex's thread writer lock.
+- The fixtures in `testdata/codex` are a sanitized Codex 0.167.0 rollout from a throwaway home, a native fork of it, and a sanitized session with a sub-agent and a revert followed by another turn.
 
 ## Next work
 
@@ -46,5 +46,7 @@
 - On 0.167.0, `thread/read` returns no turns until the thread is loaded, for example by `thread/resume`, which leaves the rollout unchanged. Production import cannot count turns without resuming, which could continue automatic goals in a real home; the E2E test checks turns after resume in its isolated home.
 - A fork placed without its ancestor fails `thread/read` with "missing source rollout". With the ancestor present, the fork is not listed until it has turns of its own, and it replays its turns only after its ancestors have been resumed once, in any process. Rewriting ancestors and adjusting byte offsets behaves exactly like unchanged files.
 - `thread/turns/list` returns no turns for unloaded threads. Goals, hooks, plugins, shell snapshots, and local automations can be disabled with `--disable` feature flags, present in 0.165.0 through 0.167.0; an unknown flag stops App Server from starting.
-- `thread/revert` writes a snapshot `rollout-<time>-<thread>_<object>.jsonl` that references a prefix of the thread's own original rollout. In a fresh home, Codex resolves the thread to the original file and loses the revert, because it locates snapshots through its database.
+- `thread/revert` writes a two-record snapshot `rollout-<time>-<thread>_<object>.jsonl` that references a prefix of the thread's previous object; later turns are appended to it, and a second revert references the first snapshot's object ID. Only the state database's `threads.rollout_path` marks the snapshot as current, so a placed snapshot is ignored in a fresh home, and a scanning `thread/list` reports a reverted thread twice.
+- Codex picks up records appended to a rollout when it next loads the thread, and holds an exclusive `flock` on `thread-writer-locks/<thread>.lock` while a process has the thread loaded.
+- A sub-agent rollout names its parent's session in `session_id`; the scan rebuilds `thread_spawn_edges`, and a sub-agent can be resumed only through its parent.
 - `thread/delete` refuses a thread that forks reference.

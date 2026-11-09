@@ -60,15 +60,21 @@ Each entry uses this shape:
 - `rationale`: App Server reports sessions owned by another CLI process as unloaded, so runtime status alone cannot prove a turn is complete.
 - `impact`: Archives always end at a resumable turn boundary.
 
-### Carry forks with their ancestor prefixes
+### Transfer whole Codex sessions
 
-- `decision`: Export a forked Codex session with exactly the byte prefix of each ancestor rollout it references, root first under native file names. On import, rewrite the workspace in every file and set each descendant's byte offset to its rewritten ancestor's length; reuse a local ancestor only when it starts with that prefix, and never replace an ancestor. Verify forks by resuming their history root first in an App Server with goals, hooks, plugins, shell snapshots, and local automations disabled. Reject reverted threads and multi-agent child threads.
-- `rationale`: Prefixes are the minimal faithful history; rewriting ancestors keeps every file in the target workspace, which repository sessions need. Codex builds a fork's turns only after loading its ancestors, refuses to delete referenced threads, and locates revert snapshots through a database this project does not write.
-- `impact`: A fork cannot move to another workspace while its ancestor exists locally in the old one.
+- `decision`: A Codex session archive holds every rollout object of the root thread and of the sub-agent threads that share its session ID, plus the referenced byte prefix of every ancestor they fork from, ordered so that referenced objects come first and named as Codex names them. On import, rewrite the workspace in every file and move every `history_base` reference to the same record boundary. Replay reverts through App Server `thread/revert` and append the snapshot's later records, instead of placing snapshot files. Reuse local ancestors outside the session only when they contain the referenced prefix, and never modify them. Verify by loading the session in order in an App Server with goals, hooks, plugins, shell snapshots, and local automations disabled.
+- `rationale`: Codex records which snapshot is a thread's current history only in its own database, which only a native revert updates; it builds a fork's turns only after loading its ancestors, loads sub-agents through their parent, and refuses to delete referenced threads.
+- `impact`: Forked, reverted, and multi-agent sessions transfer, with a replayed snapshot header that differs from the archived one in its object ID and timestamps. A fork cannot move to another workspace while its ancestor exists locally in the old one.
+
+### Append updates under Codex's writer lock
+
+- `decision`: Update a thread that the archive extends by appending the new records, while holding the exclusive `flock` that Codex keeps on `thread-writer-locks/<thread>.lock` for loaded threads. Record the original and final sizes in a marker until the append is durable. Refuse to append to, replace, or replay a thread that a Codex process has loaded.
+- `rationale`: Codex picks up appended records when it next loads a thread, and its writer lock is the only cross-process signal that a session is open; App Server status cannot see other processes.
+- `impact`: Updates no longer delete threads, so threads that forks reference can be updated. The listing's update time stays at its old value until Codex itself writes to the thread.
 
 ### Replace through a recoverable rollback link
 
-- `decision`: Update or replace a session by hard-linking its rollout as a rollback copy, deleting the thread through App Server, placing and repairing the new rollout, then removing the rollback link as the commit point.
+- `decision`: Replace a diverged single-thread session by hard-linking its rollout as a rollback copy, deleting the thread through App Server, placing and repairing the new rollout, then removing the rollback link as the commit point.
 - `rationale`: App Server does not refresh an indexed thread when its file is overwritten; the link preserves the old rollout without copying it.
 - `impact`: Any interruption before the commit point is rolled back on the next import. Dry runs detect recovery markers but never recover.
 
