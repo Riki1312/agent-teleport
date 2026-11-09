@@ -18,15 +18,15 @@
 - CI runs golangci-lint (doc comments required), Prettier, and the Go tests on Linux and macOS, with the required two-home E2E tests; each job pairs one Codex version (0.165.0 to 0.167.0) with one Claude Code version (2.1.317 to 2.1.319). `make check` runs the same checks locally.
 - Whole sessions transfer: sub-agent threads, forks with their ancestor prefixes, and reverts, which import replays through `thread/revert`. Updates append records under Codex's thread writer lock.
 - The CLI works through `provider.Adapter` and `provider.Store`; path rewriting, durable file writes, and version ordering are shared packages.
+- The `agent-teleport` plugin in `plugins/` gives both agents a `teleport` skill; inside an agent, `save` and `export` select the current session.
 - Repository sessions are unpacked archives with placeholder paths; `save`, `open`, and `status` compare through a dry-run import, and `save` runs the built-in secret scan. Their E2E tests run against both native CLIs with Git clones.
 - Claude Code sessions transfer as files: transcript, sub-agent files, and saved tool outputs, with the workspace and project folder moved everywhere. The Claude Code E2E test records sessions against a scripted local Messages API.
 - The fixtures in `testdata/codex` are a sanitized Codex 0.167.0 rollout from a throwaway home, a native fork of it, and a sanitized session with a sub-agent and a revert followed by another turn.
 
 ## Next work
 
-1. Ship agent integrations: a Claude Code plugin with a skill and the Codex equivalent, running `agent-teleport save` for the current session.
-2. Make selection forgiving: a numbered prompt when no session is named in a terminal, and title substrings as selectors.
-3. Add shell completion for session IDs and saved session names.
+1. Make selection forgiving: a numbered prompt when no session is named in a terminal, and title substrings as selectors.
+2. Add shell completion for session IDs and saved session names.
 
 ## Open questions
 
@@ -68,4 +68,5 @@
 - Codex accepts a custom model provider with `wire_api = "responses"`, so a scripted local Responses API lets tests record native Codex sessions without credentials; Codex resumes a session only with its provider configured.
 - App Server `thread/list` lists only the configured model provider's threads unless `modelProviders` is an empty list.
 - Native Codex rollouts mention `CODEX_HOME`, for example in skills instructions, so relocation moves the Codex home as well as the workspace.
+- Codex 0.167 installs plugins from Claude Code marketplaces (`.claude-plugin/marketplace.json`) and reads `.claude-plugin/plugin.json`; both agents name the plugin skill `agent-teleport:teleport`.
 - Claude Code writes `queue-operation` records with the prompt text before each prompt record.

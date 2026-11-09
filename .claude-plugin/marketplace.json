@@ -1,0 +1,14 @@
+{
+  "name": "agent-teleport",
+  "description": "Plugins that let coding agents save, share, and open sessions with agent-teleport.",
+  "owner": {
+    "name": "Riccardo"
+  },
+  "plugins": [
+    {
+      "name": "agent-teleport",
+      "source": "./plugins/agent-teleport",
+      "description": "Save the current coding session in its Git repository, check saved sessions, and open them, with the agent-teleport CLI."
+    }
+  ]
+}

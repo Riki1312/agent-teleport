@@ -28,6 +28,15 @@ type scriptedResponses struct {
 	commands map[string]string
 	// outputs are the tool outputs Codex reported, for failure messages.
 	outputs []string
+	// texts are the input texts of the latest request.
+	texts []string
+}
+
+// latestTexts returns the input texts of the latest request Codex sent.
+func (r *scriptedResponses) latestTexts() string {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return strings.Join(r.texts, "\n")
 }
 
 func (r *scriptedResponses) toolOutputs() string {
@@ -84,9 +93,13 @@ func (r *scriptedResponses) serve(writer http.ResponseWriter, request *http.Requ
 		}
 	}
 	r.mu.Lock()
+	r.texts = nil
 	for _, item := range body.Input {
 		if item.Type == "function_call_output" && len(item.Output) > 0 {
 			r.outputs = append(r.outputs, string(item.Output))
+		}
+		for _, content := range item.Content {
+			r.texts = append(r.texts, content.Text)
 		}
 	}
 	r.count++
@@ -115,7 +128,7 @@ func (r *scriptedResponses) serve(writer http.ResponseWriter, request *http.Requ
 // session's ID.
 func codexExec(t *testing.T, codexPath, home, cwd, sessionID, prompt string) string {
 	t.Helper()
-	arguments := []string{"exec", "--json", "--sandbox", "workspace-write"}
+	arguments := []string{"exec", "--json", "--skip-git-repo-check", "--sandbox", "workspace-write"}
 	if sessionID != "" {
 		arguments = append(arguments, "resume", sessionID)
 	}

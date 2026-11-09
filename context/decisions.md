@@ -40,6 +40,12 @@ Each entry uses this shape:
 - `rationale`: Append-only JSONL produces small Git diffs, the placeholders keep the manifest valid while naming no machine path, and reusing import keeps one update rule.
 - `impact`: A saved directory is written beside the old one and swapped in with renames, so an interruption never leaves a mixed copy. The first save writes `.agent-teleport/.gitattributes`, which keeps sessions byte for byte and collapses their diffs in code review.
 
+### Ship one plugin for both agents
+
+- `decision`: Ship the `teleport` skill in one plugin, `plugins/agent-teleport`, listed by `.claude-plugin/marketplace.json`, with only a Claude Code plugin manifest. The skill runs the CLI and leaves committing, `--allow-secrets`, and `--replace` to the user.
+- `rationale`: Codex 0.167 reads Claude Code marketplaces and plugin manifests, and both agents use the same skill format, so a second manifest would only duplicate it. People decide to share a session while they are in it.
+- `impact`: The plugin's install is tested in both agents. The plugin has no version, so updates follow the repository.
+
 ### Refuse likely secrets before saving
 
 - `decision`: `save` scans what it adds to the repository, the new lines of grown files and every new file, with built-in patterns for unambiguous credential formats: private key blocks and AWS, GitHub, Anthropic, OpenAI, Slack, Google, and Stripe keys. JSON records are scanned by their decoded strings. Findings name the file, line, and rule but never the secret, and refuse the save unless `--allow-secrets` is passed.

@@ -17,6 +17,16 @@ go install github.com/Riki1312/agent-teleport/cmd/agent-teleport@latest
 agent-teleport doctor
 ```
 
+To save and open sessions by asking your agent, add the `agent-teleport` plugin. Claude Code and Codex install it from the same marketplace in this repository:
+
+```sh
+/plugin install agent-teleport --marketplace Riki1312/agent-teleport   # in Claude Code
+codex plugin marketplace add Riki1312/agent-teleport                  # in a shell, for Codex
+codex plugin add agent-teleport@agent-teleport
+```
+
+Then ask, for example, "save this session to the repo". Inside an agent, `agent-teleport save` and `export` select the current session on their own, up to the turn that runs them.
+
 ## Usage
 
 ```sh

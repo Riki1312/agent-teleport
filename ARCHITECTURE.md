@@ -120,6 +120,7 @@ internal/fsutil           stable reads and atomic writes
 internal/semver           provider version ordering
 internal/buildinfo        build version
 tools/sanitize-fixture    produces sanitized Codex fixtures
+plugins/agent-teleport    agent plugin with the teleport skill, for Claude Code and Codex
 ```
 
 The CLI operates on archives and plain session values through `provider.Adapter` and `provider.Store`, which were extracted from the two adapters. Provider paths, record shapes, version rules, and state repair stay inside each adapter.
@@ -215,6 +216,10 @@ Sessions can be kept in a Git repository, next to the code they discuss, and sha
 - `status` reports each saved session as in sync, local ahead, repository ahead, diverged, or not opened. Like `save`, it compares through a dry-run import, so it never changes a session.
 - Saving refuses likely credentials in what it adds, unless `--allow-secrets` is given; see `context/decisions.md` for the patterns.
 - A save is written to a hidden sibling directory, verified, and swapped in with renames; the next command restores the previous copy if a swap was interrupted. The first save creates `.agent-teleport/.gitattributes`, which keeps sessions byte for byte in every checkout and marks them as generated, so code review collapses their diffs.
+
+## Agent plugin
+
+One plugin, `plugins/agent-teleport`, serves both agents. `.claude-plugin/marketplace.json` at the repository root lists it, and Codex reads that Claude Code marketplace and plugin manifest as well as Claude Code does. Its `teleport` skill tells the agent when and how to run `agent-teleport save`, `status`, `open`, and `export` for the current session, and what to leave to the user: committing, accepting possible secrets, and replacing a diverged copy. An end-to-end test installs the plugin into isolated homes of both agents and requires each to offer the skill.
 
 ## Safety and privacy
 
