@@ -1,0 +1,68 @@
+internal/claude/layout.go
+  s_b3feabb7857cd3::t_18ceb673461eff 3,39-41
+internal/codex/session_test.go
+  s_b3feabb7857cd3::t_97bebf15def4e0 244-257
+internal/codex/session.go
+  s_b3feabb7857cd3::t_78da4b1265a0f8 578-579,624
+  s_b3feabb7857cd3::t_ca3ca92e21a8d4 327-332,336-346,354-355
+  s_b3feabb7857cd3::t_24591fbd0bbf92 9
+internal/semver/semver.go
+  s_b3feabb7857cd3::t_18ceb673461eff 64-89
+internal/codex/append.go
+  s_b3feabb7857cd3::t_ca3ca92e21a8d4 21-26,36-37
+internal/claude/import.go
+  s_b3feabb7857cd3::t_f51bfd39cf2220 7,54-55,108-110,164,167,248-250,254-256,273-284
+  s_b3feabb7857cd3::t_24591fbd0bbf92 149,184
+internal/cli/cli_test.go
+  s_b3feabb7857cd3::t_f51bfd39cf2220 33
+internal/pathmap/pathmap_test.go
+  s_b3feabb7857cd3::t_78da4b1265a0f8 17,21,25,29,36,40
+  s_b3feabb7857cd3::t_ae46453615cec1 46-47,56
+internal/codex/rollout.go
+  s_b3feabb7857cd3::t_ca3ca92e21a8d4 271,285-289
+internal/codex/appserver/client.go
+  s_b3feabb7857cd3::t_24591fbd0bbf92 15,285,304,306,311-312,318-322
+internal/codex/import_test.go
+  s_b3feabb7857cd3::t_cef3b27f98f26e 3-8,32-107
+internal/archive/archive.go
+  s_b3feabb7857cd3::t_78da4b1265a0f8 23-24,178
+internal/provider/provider.go
+  s_b3feabb7857cd3::t_24591fbd0bbf92 19-23
+context/current.md
+  s_b3feabb7857cd3::t_c1e94998bc365d 14-15
+internal/codex/import.go
+  s_b3feabb7857cd3::t_78da4b1265a0f8 95,601,611-612,644,682
+  s_b3feabb7857cd3::t_ca3ca92e21a8d4 85-93,127-129,220,283-286,290,293-295,301-307,315,396,490
+internal/codex/append_test.go
+  s_b3feabb7857cd3::t_e7aed615815985 15,77,86-97
+internal/codex/layout.go
+  s_b3feabb7857cd3::t_18ceb673461eff 62-64
+internal/pathmap/pathmap.go
+  s_b3feabb7857cd3::t_78da4b1265a0f8 132,151,153
+internal/codex/rollout_test.go
+  s_b3feabb7857cd3::t_e7aed615815985 272,288-289
+internal/cli/help.go
+  s_b3feabb7857cd3::t_f51bfd39cf2220 38-40
+internal/cli/cli.go
+  s_b3feabb7857cd3::t_f51bfd39cf2220 169-172,300-301
+internal/codex/replace_test.go
+  s_b3feabb7857cd3::t_78da4b1265a0f8 168-176
+internal/semver/semver_test.go
+  s_b3feabb7857cd3::t_18ceb673461eff 28-52
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.2",
+  "base_commit_sha": "a279831815f997831781e66089a3c7de67bf4a6d",
+  "prompts": {},
+  "sessions": {
+    "s_b3feabb7857cd3": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "fd1b6ebe-1b52-4a20-8b44-740169df5be6",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Riccardo <riki.brero@gmail.com>"
+    }
+  }
+}
