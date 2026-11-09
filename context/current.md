@@ -3,7 +3,7 @@
 ## Product
 
 - `agent-teleport` is one Go binary for every provider; archives use `.teleport`. Commands detect the provider.
-- OpenAI Codex 0.165.0 and newer is implemented, tested through 0.167.0, and Claude Code 2.1.317 and newer, tested through 2.1.319.
+- OpenAI Codex 0.165.0 and newer is implemented, tested through 0.167.0, and Claude Code 2.1.317 and newer, tested through 2.1.321.
 - Fidelity means preserving the recorded session history, not live processes, credentials, project files, or external state.
 - Linux and macOS first; path logic stays testable on Windows.
 - The command surface, including repository sessions (`save`, `open`, `status`), is specified in `ARCHITECTURE.md`.
@@ -15,7 +15,7 @@
 - Import applies the fast-forward update rule. `--replace` uses the recoverable rollback transaction for single-thread Codex sessions and atomic renames for Claude Code sessions; other diverged Codex sessions must be deleted in Codex first.
 - Moving a session rewrites every boundary-delimited mention of the workspace in every record and saved tool output and preserves all other bytes; moving there and back is the identity on the native fixtures.
 - Collision checks cover active and archived Codex sessions.
-- CI runs golangci-lint (doc comments required), Prettier, and the Go tests on Linux and macOS, with the required two-home E2E tests; each job pairs one Codex version (0.165.0 to 0.167.0) with one Claude Code version (2.1.317 to 2.1.319). `make check` runs the same checks locally.
+- CI runs golangci-lint (doc comments required), Prettier, and the Go tests on Linux and macOS, with the required two-home E2E tests; each job pairs one Codex version (0.165.0 to 0.167.0) with one Claude Code version (2.1.317 to 2.1.321). `make check` runs the same checks locally.
 - Whole sessions transfer: sub-agent threads, forks with their ancestor prefixes, and reverts, which import replays through `thread/revert`. Updates append records under Codex's thread writer lock.
 - The CLI works through `provider.Adapter` and `provider.Store`; path rewriting, durable file writes, and version ordering are shared packages.
 - The `agent-teleport` plugin in `plugins/` gives both agents a `teleport` skill; inside an agent, `save` and `export` select the current session.
@@ -59,7 +59,7 @@
 - `api-request`, `api-request-shape`, and `api-request-blob` records are content-addressed request logs; resume does not read them.
 - Every record but file-history records carries the session ID; sub-agent records also carry `agentId` and `isSidechain`. `--fork-session` writes a full copy under a new ID. `--resume-session-at <uuid>` creates a rewind branch non-interactively.
 - `sessions/<pid>.json` lists running processes with `sessionId` and `status` (`busy` during a turn) and disappears on exit.
-- Claude Code 2.1.317 through 2.1.319 write the same record and attachment types and session folder layout.
+- Claude Code 2.1.317 through 2.1.321 write the same record and attachment types and session folder layout.
 
 ## In-agent findings
 
@@ -70,4 +70,6 @@
 - Native Codex rollouts mention `CODEX_HOME`, for example in skills instructions, so relocation moves the Codex home as well as the workspace.
 - Codex 0.167 installs plugins from Claude Code marketplaces (`.claude-plugin/marketplace.json`) and reads `.claude-plugin/plugin.json`; both agents name the plugin skill `agent-teleport:teleport`.
 - Claude Code's `/resume <id or name>` switches the running chat in place; its picker lists the current project and leaves out `-p` and SDK sessions. Codex's TUI has a resume picker. Neither lets a skill switch sessions.
+- Real homes hold Claude Code sessions with a `custom-title.json` in their session folder, sessions stored under a worktree's project folder after moving there, and Codex threads reverted twice from the same object, whose older snapshot is a dead branch. A smoke run over 75 real sessions, exported and dry-run imported elsewhere, passed after handling these.
+- Large Codex sessions reach about 470 MB; exporting a 453 MB one takes about 30 seconds and 1.4 GB of memory, and archives limit payloads to 512 MB each.
 - Claude Code writes `queue-operation` records with the prompt text before each prompt record.

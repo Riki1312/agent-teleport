@@ -323,33 +323,18 @@ func (p *sessionPlan) keep(index int, incoming, local rolloutFile, records []byt
 	p.objects[incoming.object] = localObject{object: local.object, data: append(append([]byte{}, local.data...), records...), from: incoming.data}
 }
 
-// localChain reads the local objects of a thread in chain order: the original
-// rollout first, then each snapshot that references the previous object.
+// localChain reads the local objects of a thread in chain order, from the
+// original rollout to the current object; see currentChain.
 func (s *Store) localChain(stored storedSession) ([]rolloutFile, error) {
-	original, err := readRolloutFile(stored.active[0])
-	if err != nil {
-		return nil, err
-	}
-	original.location = stored.active[0]
-	snapshots := map[string]rolloutFile{}
-	for _, path := range stored.snapshots {
-		snapshot, err := readRolloutFile(path)
+	objects := make([]rolloutFile, 0, 1+len(stored.snapshots))
+	for _, path := range append([]string{stored.active[0]}, stored.snapshots...) {
+		object, err := readRolloutFile(path)
 		if err != nil {
 			return nil, err
 		}
-		snapshot.location = path
-		snapshots[snapshot.meta.Base.ObjectID] = snapshot
+		objects = append(objects, object)
 	}
-	chain := []rolloutFile{original}
-	for len(snapshots) > 0 {
-		next, ok := snapshots[chain[len(chain)-1].object]
-		if !ok {
-			return nil, fmt.Errorf("thread %s has snapshots that do not form one revert chain", original.meta.ID)
-		}
-		delete(snapshots, chain[len(chain)-1].object)
-		chain = append(chain, next)
-	}
-	return chain, nil
+	return currentChain(objects)
 }
 
 // segments returns the comparable parts of a thread's objects: the whole

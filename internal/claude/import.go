@@ -29,7 +29,7 @@ func (s *Store) Import(request provider.ImportRequest) (provider.ImportResult, e
 	if err != nil {
 		return provider.ImportResult{}, err
 	}
-	result := provider.ImportResult{SessionID: incoming.id, Workspace: incoming.info.workspace, Outcome: plan.outcome}
+	result := provider.ImportResult{SessionID: incoming.id, Workspace: incoming.workspace, Outcome: plan.outcome}
 	if request.DryRun || !plan.changes() {
 		return result, nil
 	}
@@ -90,15 +90,15 @@ const (
 	// localAhead means the local copy has the file alone or extends it.
 	localAhead
 	diverged
-	// metadataChanged means sub-agent metadata differs, which follows the
-	// direction of the rest of the session.
+	// metadataChanged means sub-agent metadata or the custom title differs,
+	// which follows the direction of the rest of the session.
 	metadataChanged
 )
 
 // planImport compares the archived session with the local copy and decides
 // every file change.
 func (s *Store) planImport(incoming claudeSession, replace bool) (importPlan, error) {
-	plan := importPlan{folder: s.projectFolder(incoming.info.workspace)}
+	plan := importPlan{folder: s.projectFolder(incoming.workspace)}
 	folders, err := transcriptFolders(s.home, incoming.id)
 	if err != nil {
 		return importPlan{}, err
@@ -193,7 +193,7 @@ func compareFile(file sessionFile, local map[string][]byte) fileComparison {
 		return incomingAhead
 	case bytes.Equal(existing, file.data):
 		return sameFile
-	case file.kind == agentMetadataKind:
+	case file.kind == agentMetadataKind || file.kind == titleKind:
 		return metadataChanged
 	case !file.isTranscript():
 		return diverged

@@ -344,3 +344,34 @@ func TestRelocateMovesSavedToolOutputsAndTheProjectFolder(t *testing.T) {
 		}
 	}
 }
+
+func TestReadSessionUsesTheWorkspaceOfItsProjectFolder(t *testing.T) {
+	home := t.TempDir()
+	worktree := sourceWorkspace + "/.claude/worktrees/feature"
+	folder := filepath.Join(home, "projects", projectFolderName(worktree))
+	if err := os.MkdirAll(filepath.Join(folder, testSessionID), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(folder, testSessionID+".jsonl"), lines(message("start", sourceWorkspace), message("in the worktree", worktree)), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(folder, testSessionID, "custom-title.json"), []byte(`{"customTitle":"Feature work"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	store := &Store{home: home, version: "2.1.319", layout: layouts[0]}
+
+	// when
+	exported, err := store.Export(testSessionID, time.Now())
+
+	// then
+	if err != nil {
+		t.Fatal(err)
+	}
+	if exported.Manifest.Workspace != worktree || len(exported.Payloads) != 2 {
+		t.Fatalf("Export() workspace %s with %d files", exported.Manifest.Workspace, len(exported.Payloads))
+	}
+	if sessions, err := store.Sessions(worktree); err != nil || len(sessions) != 1 || sessions[0].Workspace != worktree {
+		t.Fatalf("Sessions() = %+v, %v", sessions, err)
+	}
+	mustImport(t, testStore(t), exported, "/target", false, provider.Imported)
+}

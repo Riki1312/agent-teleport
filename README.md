@@ -6,7 +6,7 @@
 agent-teleport export --last -o - | ssh workstation agent-teleport import -
 ```
 
-Supported agents are OpenAI Codex 0.165.0 or newer, tested through 0.167.0, and Claude Code 2.1.317 or newer, tested through 2.1.319; `agent-teleport doctor` warns about newer, untested releases. Commands find the agent on their own.
+Supported agents are OpenAI Codex 0.165.0 or newer, tested through 0.167.0, and Claude Code 2.1.317 or newer, tested through 2.1.321; `agent-teleport doctor` warns about newer, untested releases. Commands find the agent on their own.
 
 ## Install
 

@@ -117,21 +117,25 @@ func (s *Store) Sessions(workspace string) ([]provider.Session, error) {
 			return nil, fmt.Errorf("list Claude Code sessions: %w", err)
 		}
 		info, err := parseTranscript(completeRecords(data), id, "")
-		if err != nil || (workspace != "" && info.workspace != workspace) {
+		if err != nil {
 			continue
 		}
-		sessions = append(sessions, listedSession(id, info))
+		stored, ok := info.workspaceIn(filepath.Base(filepath.Dir(path)))
+		if !ok || (workspace != "" && stored != workspace) {
+			continue
+		}
+		sessions = append(sessions, listedSession(id, stored, info))
 	}
 	slices.SortStableFunc(sessions, func(a, b provider.Session) int { return b.UpdatedAt.Compare(a.UpdatedAt) })
 	return sessions, nil
 }
 
-func listedSession(id string, info transcriptInfo) provider.Session {
+func listedSession(id, workspace string, info transcriptInfo) provider.Session {
 	return provider.Session{
 		Provider:  Provider,
 		ID:        id,
 		Title:     info.title,
-		Workspace: info.workspace,
+		Workspace: workspace,
 		UpdatedAt: info.updatedAt,
 	}
 }
@@ -146,7 +150,7 @@ func (s *Store) Session(id string) (provider.Session, error) {
 	if err != nil {
 		return provider.Session{}, fmt.Errorf("read Claude Code session %s: %w", id, err)
 	}
-	return listedSession(id, session.info), nil
+	return listedSession(id, session.workspace, session.info), nil
 }
 
 // sessionFolder returns the project folder that holds the transcript of id.
@@ -187,14 +191,11 @@ func (s *Store) Export(id string, createdAt time.Time) (archive.Archive, error) 
 			return archive.Archive{}, fmt.Errorf("snapshot session %s: %w", id, err)
 		}
 	}
-	if projectFolderName(session.info.workspace) != filepath.Base(folder) {
-		return archive.Archive{}, fmt.Errorf("session %s started in %s but is stored in project folder %s", id, session.info.workspace, filepath.Base(folder))
-	}
 	return archive.New(archive.Header{
 		Provider:        Provider,
 		ProviderVersion: s.version,
 		SessionID:       id,
-		Workspace:       session.info.workspace,
+		Workspace:       session.workspace,
 		Home:            s.home,
 		CreatedAt:       createdAt,
 	}, session.payloads())
@@ -234,7 +235,7 @@ func Relocate(source archive.Archive, from, to, home string) (archive.Archive, e
 		Provider:        Provider,
 		ProviderVersion: source.Manifest.ProviderVersion,
 		SessionID:       relocated.id,
-		Workspace:       relocated.info.workspace,
+		Workspace:       relocated.workspace,
 		Home:            home,
 		CreatedAt:       source.Manifest.CreatedAt,
 	}, relocated.payloads())
@@ -243,7 +244,7 @@ func Relocate(source archive.Archive, from, to, home string) (archive.Archive, e
 // relocate moves session, stored under sourceHome, from the directory from to
 // to, with home as the new configuration directory.
 func relocate(session claudeSession, sourceHome, from, to, home string) (claudeSession, error) {
-	target, err := pathmap.Within(session.info.workspace, from, to)
+	target, err := pathmap.Within(session.workspace, from, to)
 	if err != nil {
 		return claudeSession{}, err
 	}
@@ -251,7 +252,7 @@ func relocate(session claudeSession, sourceHome, from, to, home string) (claudeS
 	for _, move := range []pathmap.Move{
 		{From: from, To: to},
 		{
-			From: filepath.Join(sourceHome, "projects", projectFolderName(session.info.workspace)),
+			From: filepath.Join(sourceHome, "projects", projectFolderName(session.workspace)),
 			To:   filepath.Join(home, "projects", projectFolderName(target)),
 		},
 	} {
@@ -279,10 +280,7 @@ func relocate(session claudeSession, sourceHome, from, to, home string) (claudeS
 	if err != nil {
 		return claudeSession{}, err
 	}
-	if relocated.info.workspace != target {
-		return claudeSession{}, fmt.Errorf("moved transcript starts in %s, not %s", relocated.info.workspace, target)
-	}
-	return relocated, nil
+	return relocated.storedFor(target)
 }
 
 // relocateFile moves every path that mapping covers in one session file:
@@ -293,7 +291,7 @@ func relocateFile(file sessionFile, mapping pathmap.Mapping) ([]byte, error) {
 	switch file.kind {
 	case transcriptKind, agentTranscriptKind:
 		moved, err = relocateRecords(file.data, mapping)
-	case agentMetadataKind:
+	case agentMetadataKind, titleKind:
 		moved, _, err = mapping.Rewrite(file.data)
 	default:
 		moved, err = mapping.RewriteText(file.data)
@@ -320,9 +318,6 @@ func validateArchive(source archive.Archive) (layout, claudeSession, error) {
 	session, err := sessionFromArchive(source)
 	if err != nil {
 		return layout{}, claudeSession{}, fmt.Errorf("validate session: %w", err)
-	}
-	if source.Manifest.Workspace != session.info.workspace {
-		return layout{}, claudeSession{}, fmt.Errorf("manifest workspace %s does not match transcript %s", source.Manifest.Workspace, session.info.workspace)
 	}
 	return sourceLayout, session, nil
 }

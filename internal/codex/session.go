@@ -218,7 +218,11 @@ func threadHead(home, thread string) (rolloutFile, error) {
 	if len(objects) == 0 {
 		return rolloutFile{}, fmt.Errorf("thread %s has no local rollout", thread)
 	}
-	return currentObject(objects)
+	chain, err := currentChain(objects)
+	if err != nil {
+		return rolloutFile{}, err
+	}
+	return chain[len(chain)-1], nil
 }
 
 // readRolloutFile reads and parses the rollout object at path.
@@ -293,34 +297,42 @@ func spawnedThreadHeads(home, root string) ([]rolloutFile, error) {
 	}
 	heads := make([]rolloutFile, 0, len(threads))
 	for _, thread := range threads {
-		head, err := currentObject(byThread[thread])
+		chain, err := currentChain(byThread[thread])
 		if err != nil {
 			return nil, err
 		}
-		heads = append(heads, head)
+		heads = append(heads, chain[len(chain)-1])
 	}
 	return heads, nil
 }
 
-// currentObject returns the object of one thread that no other object of the
-// thread references.
-func currentObject(objects []rolloutFile) (rolloutFile, error) {
-	referenced := map[string]bool{}
+// currentChain returns the objects of one thread from its original rollout
+// to its current object. Every revert writes a snapshot that becomes the
+// thread's history, so the current object is the newest one, and object IDs
+// are UUIDv7s ordered by creation time. A snapshot outside the chain belongs
+// to a reverted branch that Codex no longer reads.
+func currentChain(objects []rolloutFile) ([]rolloutFile, error) {
+	byObject := make(map[string]rolloutFile, len(objects))
+	newest := objects[0]
 	for _, object := range objects {
-		if object.meta.Base != nil {
-			referenced[object.meta.Base.ObjectID] = true
+		byObject[object.object] = object
+		if object.object > newest.object {
+			newest = object
 		}
 	}
-	var heads []rolloutFile
-	for _, object := range objects {
-		if !referenced[object.object] {
-			heads = append(heads, object)
+	chain := []rolloutFile{newest}
+	for chain[0].object != chain[0].meta.ID {
+		base := chain[0].meta.Base
+		if base == nil {
+			return nil, fmt.Errorf("snapshot %s of thread %s references no earlier object", chain[0].name, chain[0].meta.ID)
 		}
+		previous, ok := byObject[base.ObjectID]
+		if !ok || len(chain) == len(objects) {
+			return nil, fmt.Errorf("thread %s has snapshots that do not lead back to its original rollout", chain[0].meta.ID)
+		}
+		chain = append([]rolloutFile{previous}, chain...)
 	}
-	if len(heads) != 1 {
-		return rolloutFile{}, fmt.Errorf("thread %s has %d current rollouts, want 1", objects[0].meta.ID, len(heads))
-	}
-	return heads[0], nil
+	return chain, nil
 }
 
 // firstLineSessionID reads the session ID from a rollout's first record without

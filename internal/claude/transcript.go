@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -29,9 +30,10 @@ type record struct {
 
 // transcriptInfo summarizes a transcript.
 type transcriptInfo struct {
-	// workspace is the working directory of the first record that has one,
-	// which names the project folder Claude Code stores the session in.
-	workspace string
+	// workspaces are the distinct working directories the records name, in
+	// the order they first appear. A session that moved into a worktree names
+	// both the checkout it started in and the worktree.
+	workspaces []string
 	// title is the session's custom title, else its generated title, else its
 	// first prompt.
 	title     string
@@ -59,8 +61,8 @@ func parseTranscript(data []byte, sessionID, agentID string) (transcriptInfo, er
 		if agentID != "" && entry.AgentID != "" && entry.AgentID != agentID {
 			return transcriptInfo{}, fmt.Errorf("transcript line %d belongs to agent %s, not %s", index+1, entry.AgentID, agentID)
 		}
-		if info.workspace == "" {
-			info.workspace = entry.CWD
+		if entry.CWD != "" && !slices.Contains(info.workspaces, entry.CWD) {
+			info.workspaces = append(info.workspaces, entry.CWD)
 		}
 		if timestamp, err := time.Parse(time.RFC3339Nano, entry.Timestamp); err == nil && timestamp.After(info.updatedAt) {
 			info.updatedAt = timestamp
@@ -81,7 +83,7 @@ func parseTranscript(data []byte, sessionID, agentID string) (transcriptInfo, er
 	if messages == 0 {
 		return transcriptInfo{}, errors.New("transcript has no messages")
 	}
-	if info.workspace == "" {
+	if len(info.workspaces) == 0 {
 		return transcriptInfo{}, errors.New("transcript records no working directory")
 	}
 	for _, title := range []string{customTitle, generatedTitle, firstPrompt} {
@@ -118,6 +120,18 @@ func lastPromptOffset(data []byte) int {
 		offset += len(line)
 	}
 	return last
+}
+
+// workspaceIn returns the recorded working directory whose project folder is
+// folderName, which Claude Code names after the directory it stores the
+// session for.
+func (i transcriptInfo) workspaceIn(folderName string) (string, bool) {
+	for _, workspace := range i.workspaces {
+		if projectFolderName(workspace) == folderName {
+			return workspace, true
+		}
+	}
+	return "", false
 }
 
 // completeRecords returns the prefix of data that ends with its last complete

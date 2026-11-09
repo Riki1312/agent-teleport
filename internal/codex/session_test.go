@@ -253,3 +253,33 @@ func TestFirstLineSessionIDReadsRecordsLongerThanItsBuffer(t *testing.T) {
 		t.Fatalf("firstLineSessionID() = %q, %v", sessionID, err)
 	}
 }
+
+func TestCurrentChainSkipsRevertedBranches(t *testing.T) {
+	const thread = "01a0fc3d-0000-7000-8000-000000000000"
+	object := func(id, base string) rolloutFile {
+		file := rolloutFile{name: id, object: id, meta: sessionMeta{ID: thread}}
+		if base != "" {
+			file.meta.Base = &historyBase{ObjectID: base}
+		}
+		return file
+	}
+	original := object(thread, "")
+	abandoned := object("01a0fc51-0000-7000-8000-000000000000", thread)
+	reverted := object("01a0fc52-0000-7000-8000-000000000000", thread)
+	current := object("01a0fd07-0000-7000-8000-000000000000", reverted.object)
+
+	// when
+	chain, err := currentChain([]rolloutFile{current, abandoned, original, reverted})
+
+	// then
+	if err != nil {
+		t.Fatal(err)
+	}
+	var objects []string
+	for _, file := range chain {
+		objects = append(objects, file.object)
+	}
+	if strings.Join(objects, " ") != strings.Join([]string{original.object, reverted.object, current.object}, " ") {
+		t.Fatalf("currentChain() = %v", objects)
+	}
+}

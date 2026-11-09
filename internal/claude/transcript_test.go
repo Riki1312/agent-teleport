@@ -2,6 +2,7 @@ package claude
 
 import (
 	"errors"
+	"slices"
 	"strings"
 	"testing"
 
@@ -49,7 +50,7 @@ func TestParseTranscriptSummarizesTheSession(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if info.workspace != "/work/project" || info.title != "fix the build" || info.updatedAt.Minute() != 5 {
+	if !slices.Equal(info.workspaces, []string{"/work/project", "/work/project/sub"}) || info.title != "fix the build" || info.updatedAt.Minute() != 5 {
 		t.Fatalf("parseTranscript() = %+v", info)
 	}
 }
@@ -162,8 +163,8 @@ func TestLayoutForVersions(t *testing.T) {
 	}{
 		{version: "2.1.316", supported: false},
 		{version: "2.1.317", supported: true, tested: true},
-		{version: "2.1.319", supported: true, tested: true},
-		{version: "2.1.320", supported: true, tested: false},
+		{version: "2.1.321", supported: true, tested: true},
+		{version: "2.1.322", supported: true, tested: false},
 	} {
 		// when
 		_, tested, err := layoutFor(test.version)

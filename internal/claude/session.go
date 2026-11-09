@@ -10,6 +10,7 @@ import (
 	"path"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strings"
 
 	"github.com/Riki1312/agent-teleport/internal/archive"
@@ -31,6 +32,9 @@ const (
 	// toolResultKind is a tool output too large to keep in the transcript,
 	// <session>/tool-results/<name>.
 	toolResultKind
+	// titleKind holds the custom title of a renamed session,
+	// <session>/custom-title.json.
+	titleKind
 )
 
 var (
@@ -57,9 +61,23 @@ func (f sessionFile) isTranscript() bool {
 // claudeSession is a validated session: its transcript first, then the files
 // of its session folder in path order.
 type claudeSession struct {
-	id    string
-	info  transcriptInfo
-	files []sessionFile
+	id   string
+	info transcriptInfo
+	// workspace is the recorded working directory the session is stored
+	// for: the one its project folder is named after, or the one an archive
+	// names.
+	workspace string
+	files     []sessionFile
+}
+
+// storedFor returns the session as stored for workspace, which its records
+// must name.
+func (s claudeSession) storedFor(workspace string) (claudeSession, error) {
+	if !slices.Contains(s.info.workspaces, workspace) {
+		return claudeSession{}, fmt.Errorf("session %s records no working directory %s", s.id, workspace)
+	}
+	s.workspace = workspace
+	return s, nil
 }
 
 func (s claudeSession) payloads() []archive.Payload {
@@ -73,8 +91,11 @@ func (s claudeSession) payloads() []archive.Payload {
 // classifyPath returns the kind of a session file path and, for sub-agent
 // files, the agent ID. Unknown files fail closed.
 func classifyPath(sessionID, filePath string) (fileKind, string, error) {
-	if filePath == sessionID+".jsonl" {
+	switch filePath {
+	case sessionID + ".jsonl":
 		return transcriptKind, "", nil
+	case sessionID + "/custom-title.json":
+		return titleKind, "", nil
 	}
 	directory, name := path.Split(filePath)
 	switch directory {
@@ -115,7 +136,7 @@ func newSession(sessionID string, files []sessionFile) (claudeSession, error) {
 			if _, err := parseTranscript(file.data, sessionID, agent); err != nil {
 				return claudeSession{}, fmt.Errorf("%s: %w", file.path, err)
 			}
-		case agentMetadataKind:
+		case agentMetadataKind, titleKind:
 			var metadata map[string]any
 			if err := json.Unmarshal(file.data, &metadata); err != nil {
 				return claudeSession{}, fmt.Errorf("%s: %w", file.path, err)
@@ -208,7 +229,7 @@ func (s claudeSession) withoutTurnInProgress() (claudeSession, error) {
 	if err != nil {
 		return claudeSession{}, fmt.Errorf("the session has no completed turn yet: %w", err)
 	}
-	return session, nil
+	return session.storedFor(s.workspace)
 }
 
 // agentToolUse returns the ID of the tool call that started a sub-agent, as
@@ -233,22 +254,36 @@ func startedIn(transcript []byte, toolUse string) bool {
 	return toolUse == "" || bytes.Contains(transcript, []byte(`"`+toolUse+`"`))
 }
 
-// readSession reads and validates a stored session.
+// readSession reads and validates a stored session, for the recorded
+// working directory its project folder is named after.
 func readSession(folder, sessionID string) (claudeSession, error) {
 	files, err := readLocalFiles(folder, sessionID)
 	if err != nil {
 		return claudeSession{}, err
 	}
-	return newSession(sessionID, files)
+	session, err := newSession(sessionID, files)
+	if err != nil {
+		return claudeSession{}, err
+	}
+	workspace, ok := session.info.workspaceIn(filepath.Base(folder))
+	if !ok {
+		return claudeSession{}, fmt.Errorf("session %s records no working directory that Claude Code stores in project folder %s", sessionID, filepath.Base(folder))
+	}
+	return session.storedFor(workspace)
 }
 
-// sessionFromArchive validates the payloads of an archive as one session.
+// sessionFromArchive validates the payloads of an archive as one session,
+// stored for the workspace the manifest names.
 func sessionFromArchive(source archive.Archive) (claudeSession, error) {
 	files := make([]sessionFile, 0, len(source.Payloads))
 	for _, payload := range source.Payloads {
 		files = append(files, sessionFile{path: payload.Path, data: payload.Data})
 	}
-	return newSession(source.Manifest.SessionID, files)
+	session, err := newSession(source.Manifest.SessionID, files)
+	if err != nil {
+		return claudeSession{}, err
+	}
+	return session.storedFor(source.Manifest.Workspace)
 }
 
 // transcriptFolders returns the project folders that hold a transcript of
@@ -280,5 +315,8 @@ func readFolderWorkspace(folder, sessionID string) string {
 	if err != nil {
 		return filepath.Base(folder)
 	}
-	return info.workspace
+	if workspace, ok := info.workspaceIn(filepath.Base(folder)); ok {
+		return workspace
+	}
+	return filepath.Base(folder)
 }

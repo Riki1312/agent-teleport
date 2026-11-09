@@ -18,7 +18,7 @@ type layout struct {
 var layouts = []layout{
 	{
 		minimum:      "2.1.317",
-		newestTested: "2.1.319",
+		newestTested: "2.1.321",
 	},
 }
 

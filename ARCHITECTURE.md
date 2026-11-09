@@ -136,7 +136,7 @@ Codex storage is a private implementation detail. The adapter prefers Codex App 
 Codex stores each thread in rollout files under `sessions/` (and `archived_sessions/`). A rollout's first record, `session_meta`, names its thread and its session; they are equal for a session's root thread, while a sub-agent thread names the session of the root that spawned it. A rollout may start with a `history_base` that references a byte prefix of another rollout object:
 
 - A fork references a prefix of another thread's rollout.
-- A revert snapshot, named `rollout-<time>-<thread>_<object>.jsonl`, references a prefix of an earlier object of the same thread and becomes the thread's current history. Later turns are appended to it, and a second revert references the first snapshot's object.
+- A revert snapshot, named `rollout-<time>-<thread>_<object>.jsonl`, references a prefix of an earlier object of the same thread and becomes the thread's current history. Later turns are appended to it, and a second revert references the first snapshot's object, or an earlier one. Object IDs are UUIDv7s, so a thread's current object is its newest, and a snapshot outside the chain from it back to the original rollout is a reverted branch that is not exported.
 
 An archived Codex session therefore holds every object of the root thread and of its sub-agent threads, plus the referenced prefix of every ancestor they fork from, ordered so that each referenced object precedes the files that reference it. Payloads keep their native file names.
 
@@ -184,7 +184,7 @@ Each rollout layout covers a range of Codex versions: its turn boundary events, 
 
 ## Claude Code adapter
 
-Claude Code keeps each session as an append-only JSONL transcript, `projects/<folder>/<session>.jsonl`, under its configuration directory (`CLAUDE_CONFIG_DIR`, by default `~/.claude`). The folder is named after the workspace the session started in: every UTF-16 code unit other than an ASCII letter or digit becomes `-`, and a name longer than 200 characters is cut to 200 and suffixed with `-` and a base-36 hash of the path. Beside the transcript, the session folder `<session>/` holds sub-agent transcripts and metadata in `subagents/` and tool outputs too large for the transcript in `tool-results/`. Rewinds are branches of the record tree inside the same transcript, and a native fork is a separate, self-contained session.
+Claude Code keeps each session as an append-only JSONL transcript, `projects/<folder>/<session>.jsonl`, under its configuration directory (`CLAUDE_CONFIG_DIR`, by default `~/.claude`). The folder is named after the workspace the session started in: every UTF-16 code unit other than an ASCII letter or digit becomes `-`, and a name longer than 200 characters is cut to 200 and suffixed with `-` and a base-36 hash of the path. Beside the transcript, the session folder `<session>/` holds sub-agent transcripts and metadata in `subagents/`, tool outputs too large for the transcript in `tool-results/`, and the custom title of a renamed session in `custom-title.json`. A session's workspace is the recorded working directory its project folder is named after; a session that moved into a worktree is stored for the worktree. Rewinds are branches of the record tree inside the same transcript, and a native fork is a separate, self-contained session.
 
 Claude Code has no index and no server: it resumes a session by finding its transcript in any project folder, appends to it in place, and keeps a registry of running processes in `sessions/<pid>.json`. The adapter therefore reads and writes the files directly and never touches other Claude Code state.
 
@@ -205,7 +205,7 @@ Claude Code has no index and no server: it resumes a session by finding its tran
 
 ### Supported versions
 
-The current layout starts at Claude Code 2.1.317 and is tested through 2.1.319, with the same rules as Codex: older versions fail closed, newer versions are accepted with a `doctor` warning, and structural validation rejects unknown files.
+The current layout starts at Claude Code 2.1.317 and is tested through 2.1.321, with the same rules as Codex: older versions fail closed, newer versions are accepted with a `doctor` warning, and structural validation rejects unknown files.
 
 ## Repository sessions
 

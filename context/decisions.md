@@ -70,7 +70,7 @@ Each entry uses this shape:
 
 - `decision`: Map each rollout layout to a range of provider versions, starting at a minimum version and tested through the newest release verified by a sanitized fixture and the two-home test in CI. Older versions fail closed; newer versions are accepted with a `doctor` warning while structural validation still rejects unknown layouts. Drop older layouts, their fixtures, and their code once newer support lands. Unreleased formats change without migrations.
 - `rationale`: Codex releases every few days; exact-version gating would break with every release, while structural validation and the CI matrix keep support honest.
-- `impact`: Codex 0.165.0 and newer are supported, tested through 0.167.0, and Claude Code 2.1.317 and newer, tested through 2.1.319. CI pairs one version of each provider per job.
+- `impact`: Codex 0.165.0 and newer are supported, tested through 0.167.0, and Claude Code 2.1.317 and newer, tested through 2.1.321. CI pairs one version of each provider per job.
 
 ### Let the provider repair its own state
 
