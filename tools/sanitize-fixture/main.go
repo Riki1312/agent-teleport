@@ -1,5 +1,6 @@
-// Command sanitize-fixture scrubs a completed rollout for compatibility fixture
-// development. Its output must still be manually reviewed before commit.
+// Command sanitize-fixture scrubs a completed Codex rollout for use as a
+// compatibility fixture. Its output must still be reviewed manually before it
+// is committed.
 package main
 
 import (
@@ -24,12 +25,11 @@ func main() {
 	if err != nil {
 		fail(err)
 	}
-	defer input.Close()
+	defer func() { _ = input.Close() }()
 	output, err := os.OpenFile(outputPath, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
 	if err != nil {
 		fail(err)
 	}
-	defer output.Close()
 
 	scanner := bufio.NewScanner(input)
 	scanner.Buffer(make([]byte, 64<<10), 64<<20)
@@ -51,6 +51,9 @@ func main() {
 	}
 	if lastType != "event_msg/task_complete" {
 		fail(errors.New("source does not end at a completed turn"))
+	}
+	if err := output.Close(); err != nil {
+		fail(err)
 	}
 }
 
