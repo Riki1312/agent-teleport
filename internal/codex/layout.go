@@ -4,8 +4,8 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
-	"strconv"
-	"strings"
+
+	"github.com/Riki1312/agent-teleport/internal/semver"
 )
 
 // eventKind identifies a rollout event by its type and, for wrapped events, the
@@ -60,14 +60,14 @@ var layouts = []layout{
 // layoutFor returns the layout of a Codex version and whether that version is
 // within the tested range. Versions older than every layout fail closed.
 func layoutFor(version string) (layout, bool, error) {
-	parsed, err := parseVersion(version)
+	parsed, err := semver.Parse(version)
 	if err != nil {
-		return layout{}, false, err
+		return layout{}, false, fmt.Errorf("Codex: %w", err)
 	}
 	for index := len(layouts) - 1; index >= 0; index-- {
 		candidate := layouts[index]
-		if parsed.compare(mustParseVersion(candidate.minimum)) >= 0 {
-			tested := parsed.compare(mustParseVersion(candidate.newestTested)) <= 0
+		if parsed.Compare(semver.MustParse(candidate.minimum)) >= 0 {
+			tested := parsed.Compare(semver.MustParse(candidate.newestTested)) <= 0
 			return candidate, tested, nil
 		}
 	}
@@ -104,55 +104,4 @@ func classifyEvent(line []byte) (eventKind, error) {
 		kind.payloadType = payload.Type
 	}
 	return kind, nil
-}
-
-// version is a Codex release version such as 0.167.0 or 0.168.0-alpha.1.
-type version struct {
-	numbers    [3]int
-	prerelease bool
-}
-
-func parseVersion(value string) (version, error) {
-	release, prerelease, _ := strings.Cut(value, "-")
-	parts := strings.Split(release, ".")
-	if len(parts) != 3 {
-		return version{}, fmt.Errorf("unrecognized Codex version %q", value)
-	}
-	parsed := version{prerelease: prerelease != ""}
-	for index, part := range parts {
-		number, err := strconv.Atoi(part)
-		if err != nil || number < 0 {
-			return version{}, fmt.Errorf("unrecognized Codex version %q", value)
-		}
-		parsed.numbers[index] = number
-	}
-	return parsed, nil
-}
-
-func mustParseVersion(value string) version {
-	parsed, err := parseVersion(value)
-	if err != nil {
-		panic(err)
-	}
-	return parsed
-}
-
-// compare orders versions; a prerelease sorts before its release.
-func (v version) compare(other version) int {
-	for index := range v.numbers {
-		if v.numbers[index] != other.numbers[index] {
-			if v.numbers[index] < other.numbers[index] {
-				return -1
-			}
-			return 1
-		}
-	}
-	switch {
-	case v.prerelease == other.prerelease:
-		return 0
-	case v.prerelease:
-		return -1
-	default:
-		return 1
-	}
 }

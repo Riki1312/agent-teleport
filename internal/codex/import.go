@@ -10,41 +10,9 @@ import (
 
 	"github.com/Riki1312/agent-teleport/internal/archive"
 	"github.com/Riki1312/agent-teleport/internal/codex/appserver"
+	"github.com/Riki1312/agent-teleport/internal/fsutil"
+	"github.com/Riki1312/agent-teleport/internal/provider"
 )
-
-// ImportRequest describes one archive import.
-type ImportRequest struct {
-	Archive archive.Archive
-	// Workspace is the canonical absolute directory the session is mapped to.
-	Workspace string
-	// Replace allows overwriting a local copy that has diverged from the
-	// archive, or that belongs to another workspace.
-	Replace bool
-	DryRun  bool
-}
-
-// ImportOutcome is what Import did, or would do in a dry run.
-type ImportOutcome string
-
-const (
-	// Imported means the session was new and is now available.
-	Imported ImportOutcome = "imported"
-	// Updated means the archive extended the local copy, which now matches it.
-	Updated ImportOutcome = "updated"
-	// Unchanged means the local copy already matched the archive.
-	Unchanged ImportOutcome = "unchanged"
-	// KeptNewer means the local copy extends the archive and was kept.
-	KeptNewer ImportOutcome = "kept-newer"
-	// Replaced means a diverged local copy was replaced with the archive.
-	Replaced ImportOutcome = "replaced"
-)
-
-// ImportResult reports the session an import produced.
-type ImportResult struct {
-	SessionID string
-	Workspace string
-	Outcome   ImportOutcome
-}
 
 // Import validates an archive for the installed Codex version, maps it to
 // request.Workspace, and makes the session available through Codex: its root
@@ -53,31 +21,31 @@ type ImportResult struct {
 // archive extends receive the new records, and reverts are replayed through
 // Codex. Nothing changes before the whole session has been planned, and a dry
 // run never starts App Server.
-func (s *Store) Import(request ImportRequest) (ImportResult, error) {
+func (s *Store) Import(request provider.ImportRequest) (provider.ImportResult, error) {
 	session, err := s.prepareSession(request.Archive, request.Workspace)
 	if err != nil {
-		return ImportResult{}, err
+		return provider.ImportResult{}, err
 	}
 	var client *appserver.Client
 	if !request.DryRun {
 		if client, err = s.appServer(); err != nil {
-			return ImportResult{}, err
+			return provider.ImportResult{}, err
 		}
 		if err := s.recoverSession(client, session); err != nil {
-			return ImportResult{}, err
+			return provider.ImportResult{}, err
 		}
 	}
 	plan, err := s.planSession(session, request.Replace)
 	if err != nil {
-		return ImportResult{}, err
+		return provider.ImportResult{}, err
 	}
 	root := session.head(session.root)
-	result := ImportResult{SessionID: session.root, Workspace: root.meta.CWD, Outcome: plan.outcome}
+	result := provider.ImportResult{SessionID: session.root, Workspace: root.meta.CWD, Outcome: plan.outcome}
 	if request.DryRun || !plan.changes() {
 		return result, nil
 	}
 	if err := s.executePlan(client, session, plan); err != nil {
-		return ImportResult{}, err
+		return provider.ImportResult{}, err
 	}
 	return result, nil
 }
@@ -169,7 +137,7 @@ func (o localObject) moved(offset int64) (int64, error) {
 type sessionPlan struct {
 	files   []filePlan
 	objects map[string]localObject
-	outcome ImportOutcome
+	outcome provider.ImportOutcome
 }
 
 func (p sessionPlan) changes() bool {
@@ -185,7 +153,7 @@ func (p sessionPlan) changes() bool {
 // thread of the session.
 func (s *Store) planSession(session codexSession, replace bool) (sessionPlan, error) {
 	plan := sessionPlan{files: make([]filePlan, len(session.files)), objects: map[string]localObject{}}
-	outcomes := map[string]ImportOutcome{}
+	outcomes := map[string]provider.ImportOutcome{}
 	for _, thread := range session.threads() {
 		outcome, err := s.planThread(session, thread, replace, &plan)
 		if err != nil {
@@ -194,10 +162,10 @@ func (s *Store) planSession(session codexSession, replace bool) (sessionPlan, er
 		outcomes[thread] = outcome
 	}
 	plan.outcome = outcomes[session.root]
-	if plan.outcome == Unchanged || plan.outcome == KeptNewer {
+	if plan.outcome == provider.Unchanged || plan.outcome == provider.KeptNewer {
 		for thread, outcome := range outcomes {
-			if thread != session.root && (outcome == Imported || outcome == Updated) {
-				plan.outcome = Updated
+			if thread != session.root && (outcome == provider.Imported || outcome == provider.Updated) {
+				plan.outcome = provider.Updated
 			}
 		}
 	}
@@ -208,7 +176,7 @@ func (s *Store) planSession(session codexSession, replace bool) (sessionPlan, er
 // chain: the original rollout, then each revert snapshot. A local copy is
 // compared segment by segment, where a segment is the original rollout or the
 // records a snapshot holds after its revert header.
-func (s *Store) planThread(session codexSession, thread string, replace bool, plan *sessionPlan) (ImportOutcome, error) {
+func (s *Store) planThread(session codexSession, thread string, replace bool, plan *sessionPlan) (provider.ImportOutcome, error) {
 	var chain []int
 	for index, file := range session.files {
 		if file.meta.ID == thread {
@@ -244,7 +212,7 @@ func (s *Store) planThread(session codexSession, thread string, replace bool, pl
 			}
 			plan.files[index] = filePlan{step: stepReplay}
 		}
-		return Imported, nil
+		return provider.Imported, nil
 	}
 
 	local, err := s.localChain(stored)
@@ -288,15 +256,15 @@ func (s *Store) planThread(session codexSession, thread string, replace bool, pl
 	switch {
 	case !member && (relation == historiesEqual || relation == localAhead) && len(localSegments) >= len(incomingSegments):
 		keepLast()
-		return Unchanged, nil
+		return provider.Unchanged, nil
 	case !member:
 		return "", fmt.Errorf("ancestor thread %s differs locally from the history in the archive", thread)
 	case len(incomingSegments) == len(localSegments) && relation == historiesEqual:
 		keepLast()
-		return Unchanged, nil
+		return provider.Unchanged, nil
 	case len(incomingSegments) <= len(localSegments) && (relation == historiesEqual || relation == localAhead):
 		keepLast()
-		return KeptNewer, nil
+		return provider.KeptNewer, nil
 	case len(incomingSegments) >= len(localSegments) && relation == incomingAhead:
 		records := incomingSegments[last][len(localSegments[last]):]
 		plan.keep(chain[last], incoming[last], local[last], records)
@@ -304,7 +272,7 @@ func (s *Store) planThread(session codexSession, thread string, replace bool, pl
 		keepLast()
 	case relation == historiesDiverged && replace && thread == session.root && len(chain) == 1 && len(local) == 1:
 		plan.files[chain[0]] = filePlan{step: stepReplace, path: stored.active[0]}
-		return Replaced, nil
+		return provider.Replaced, nil
 	case relation == historiesDiverged && thread == session.root:
 		return "", fmt.Errorf("session %s has diverged from the archive; pass --replace to overwrite the local copy", thread)
 	default:
@@ -313,7 +281,7 @@ func (s *Store) planThread(session codexSession, thread string, replace bool, pl
 	for _, index := range chain[common:] {
 		plan.files[index] = filePlan{step: stepReplay}
 	}
-	return Updated, nil
+	return provider.Updated, nil
 }
 
 // keep plans to leave a local object as it is, or to append records to it,
@@ -632,7 +600,7 @@ func (s *Store) placeRollout(destination string, rollout []byte) error {
 		return fmt.Errorf("create session directory: %w", err)
 	}
 	stage := stagePath(destination)
-	if err := writeExclusive(stage, rollout); err != nil {
+	if err := fsutil.WriteExclusive(stage, rollout); err != nil {
 		return fmt.Errorf("stage rollout: %w", err)
 	}
 	linkErr := os.Link(stage, destination)
@@ -646,7 +614,7 @@ func (s *Store) placeRollout(destination string, rollout []byte) error {
 	if removeErr != nil {
 		return fmt.Errorf("remove rollout stage: %w", removeErr)
 	}
-	return syncDirectory(directory)
+	return fsutil.SyncDirectory(directory)
 }
 
 // verifySession lets Codex scan and repair a self-contained thread, then

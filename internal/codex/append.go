@@ -7,6 +7,8 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+
+	"github.com/Riki1312/agent-teleport/internal/fsutil"
 )
 
 // appendSuffix names the marker kept next to a rollout while records are
@@ -32,10 +34,10 @@ func appendRecords(home, thread, path string, records []byte) error {
 	}
 	marker := path + appendSuffix
 	sizes := fmt.Sprintf("%d %d\n", info.Size(), info.Size()+int64(len(records)))
-	if err := writeExclusive(marker, []byte(sizes)); err != nil {
+	if err := fsutil.WriteExclusive(marker, []byte(sizes)); err != nil {
 		return fmt.Errorf("record append marker: %w", err)
 	}
-	if err := syncDirectory(filepath.Dir(path)); err != nil {
+	if err := fsutil.SyncDirectory(filepath.Dir(path)); err != nil {
 		return err
 	}
 	file, err := os.OpenFile(path, os.O_WRONLY|os.O_APPEND, 0)
@@ -55,7 +57,7 @@ func appendRecords(home, thread, path string, records []byte) error {
 	if err := os.Remove(marker); err != nil {
 		return fmt.Errorf("commit append: %w", err)
 	}
-	return syncDirectory(filepath.Dir(path))
+	return fsutil.SyncDirectory(filepath.Dir(path))
 }
 
 // recoverAppend completes or undoes an append to the rollout at path that was
@@ -99,7 +101,7 @@ func recoverAppend(home, thread, path string) error {
 	if err := os.Remove(marker); err != nil {
 		return fmt.Errorf("remove append marker: %w", err)
 	}
-	return syncDirectory(filepath.Dir(path))
+	return fsutil.SyncDirectory(filepath.Dir(path))
 }
 
 // requireClosed fails when a Codex process has thread loaded.

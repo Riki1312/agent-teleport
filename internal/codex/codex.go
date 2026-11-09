@@ -9,6 +9,7 @@ package codex
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -18,10 +19,27 @@ import (
 
 	"github.com/Riki1312/agent-teleport/internal/archive"
 	"github.com/Riki1312/agent-teleport/internal/codex/appserver"
+	"github.com/Riki1312/agent-teleport/internal/provider"
 )
 
 // Provider identifies Codex sessions in archive manifests.
 const Provider = "openai-codex"
+
+// Adapter registers Codex with the command-line interface.
+var Adapter = provider.Adapter{
+	ID:      Provider,
+	Name:    "Codex",
+	Command: "codex",
+	Open: func(ctx context.Context) (provider.Store, error) {
+		store, err := Open(ctx)
+		if err != nil {
+			return nil, err
+		}
+		return store, nil
+	},
+	Diagnose:        Diagnose,
+	ValidateArchive: ValidateArchive,
+}
 
 // BinaryEnvironment names the variable that overrides the Codex binary path.
 const BinaryEnvironment = "AGENT_TELEPORT_CODEX"
@@ -43,35 +61,6 @@ type Store struct {
 	version string
 	layout  layout
 	client  *appserver.Client
-}
-
-// Session summarizes a local Codex session.
-type Session struct {
-	ID string
-	// Title is the session's name, or Codex's preview of its first message.
-	Title     string
-	Workspace string
-	UpdatedAt time.Time
-
-	rolloutPath string
-	status      string
-}
-
-// Diagnosis describes the local Codex installation without changing it.
-type Diagnosis struct {
-	Home    string
-	Version string
-	// Supported reports whether the version has a known rollout layout, and
-	// Tested whether it is within the range verified by the two-home test.
-	Supported bool
-	Tested    bool
-	// MinimumVersion and NewestTestedVersion bound the verified range.
-	MinimumVersion      string
-	NewestTestedVersion string
-	// DetectionError reports why the Codex home or version could not be found.
-	DetectionError error
-	// AppServerError reports why App Server could not start or list threads.
-	AppServerError error
 }
 
 // Open detects the local Codex installation and requires a supported version.
@@ -100,7 +89,7 @@ func (s *Store) Close() {
 
 // Sessions lists local sessions, most recently updated first. An empty
 // workspace lists sessions from every workspace.
-func (s *Store) Sessions(workspace string) ([]Session, error) {
+func (s *Store) Sessions(workspace string) ([]provider.Session, error) {
 	client, err := s.appServer()
 	if err != nil {
 		return nil, err
@@ -111,7 +100,7 @@ func (s *Store) Sessions(workspace string) ([]Session, error) {
 	}
 	// A scanning listing reports a reverted thread twice: once from Codex's
 	// database and once from its original rollout file.
-	sessions := make([]Session, 0, len(threads))
+	sessions := make([]provider.Session, 0, len(threads))
 	seen := map[string]bool{}
 	for _, thread := range threads {
 		if !seen[thread.ID] {
@@ -122,58 +111,70 @@ func (s *Store) Sessions(workspace string) ([]Session, error) {
 	return sessions, nil
 }
 
-func newSession(thread appserver.Thread) Session {
+func newSession(thread appserver.Thread) provider.Session {
 	title := thread.Name
 	if title == "" {
 		title = thread.Preview
 	}
-	return Session{
-		ID:          thread.ID,
-		Title:       strings.Join(strings.Fields(title), " "),
-		Workspace:   thread.CWD,
-		UpdatedAt:   time.Unix(thread.UpdatedAt, 0).UTC(),
-		rolloutPath: thread.Path,
-		status:      thread.Status.Type,
+	return provider.Session{
+		Provider:  Provider,
+		ID:        thread.ID,
+		Title:     strings.Join(strings.Fields(title), " "),
+		Workspace: thread.CWD,
+		UpdatedAt: time.Unix(thread.UpdatedAt, 0).UTC(),
 	}
 }
 
 // Session returns a local session by its full ID. Codex lists a fork only
 // once it has turns of its own, so a session can exist without being listed.
-func (s *Store) Session(id string) (Session, error) {
+func (s *Store) Session(id string) (provider.Session, error) {
+	thread, err := s.thread(id)
+	if err != nil {
+		return provider.Session{}, err
+	}
+	return newSession(thread), nil
+}
+
+func (s *Store) thread(id string) (appserver.Thread, error) {
 	client, err := s.appServer()
 	if err != nil {
-		return Session{}, err
+		return appserver.Thread{}, err
 	}
 	thread, err := client.Read(id)
 	if err != nil {
-		return Session{}, fmt.Errorf("read Codex session %s: %w", id, err)
+		return appserver.Thread{}, fmt.Errorf("read Codex session %s: %w", id, err)
 	}
-	return newSession(thread), nil
+	return thread, nil
 }
 
 // Export snapshots a completed session into an archive stamped with createdAt.
 // A forked session carries the prefix of every ancestor rollout it extends. It
 // fails while the session has an active or incomplete turn.
-func (s *Store) Export(session Session, createdAt time.Time) (archive.Archive, error) {
-	if !isQuiescent(session.status) {
-		return archive.Archive{}, fmt.Errorf("session %s is not quiescent (status %q)", session.ID, session.status)
-	}
-	if session.rolloutPath == "" {
-		return archive.Archive{}, fmt.Errorf("Codex did not report a rollout path for session %s", session.ID)
-	}
-	exported, err := s.layout.readSession(s.home, session.rolloutPath)
+func (s *Store) Export(id string, createdAt time.Time) (archive.Archive, error) {
+	thread, err := s.thread(id)
 	if err != nil {
-		return archive.Archive{}, fmt.Errorf("snapshot session %s: %w", session.ID, err)
+		return archive.Archive{}, err
+	}
+	if !isQuiescent(thread.Status.Type) {
+		return archive.Archive{}, fmt.Errorf("session %s is not quiescent (status %q)", id, thread.Status.Type)
+	}
+	if thread.Path == "" {
+		return archive.Archive{}, fmt.Errorf("Codex did not report a rollout path for session %s", id)
+	}
+	exported, err := s.layout.readSession(s.home, thread.Path)
+	if err != nil {
+		return archive.Archive{}, fmt.Errorf("snapshot session %s: %w", id, err)
 	}
 	meta := exported.head(exported.root).meta
-	if meta.ID != session.ID {
-		return archive.Archive{}, fmt.Errorf("rollout session ID %s does not match selected session %s", meta.ID, session.ID)
+	if meta.ID != id {
+		return archive.Archive{}, fmt.Errorf("rollout session ID %s does not match selected session %s", meta.ID, id)
 	}
 	return archive.New(archive.Header{
 		Provider:        Provider,
 		ProviderVersion: s.version,
 		SessionID:       meta.ID,
 		Workspace:       meta.CWD,
+		Home:            s.home,
 		CreatedAt:       createdAt,
 	}, exported.payloads())
 }
@@ -193,16 +194,17 @@ func ValidateArchive(source archive.Archive) error {
 	return err
 }
 
-// Diagnose reports the local Codex installation and whether App Server starts.
-func Diagnose(ctx context.Context) Diagnosis {
-	diagnosis := Diagnosis{MinimumVersion: layouts[0].minimum, NewestTestedVersion: layouts[len(layouts)-1].newestTested}
-	diagnosis.Home, diagnosis.DetectionError = codexHome()
-	if diagnosis.DetectionError != nil {
+// Diagnose reports the local Codex installation and whether App Server starts
+// and lists threads.
+func Diagnose(ctx context.Context) provider.Diagnosis {
+	diagnosis := provider.Diagnosis{MinimumVersion: layouts[0].minimum, NewestTestedVersion: layouts[len(layouts)-1].newestTested}
+	diagnosis.Home, diagnosis.Err = codexHome()
+	if diagnosis.Err != nil {
 		return diagnosis
 	}
 	binary := codexBinary()
-	diagnosis.Version, diagnosis.DetectionError = detectVersion(ctx, binary)
-	if diagnosis.DetectionError != nil {
+	diagnosis.Version, diagnosis.Err = detectVersion(ctx, binary)
+	if diagnosis.Err != nil {
 		return diagnosis
 	}
 	_, tested, layoutErr := layoutFor(diagnosis.Version)
@@ -213,7 +215,9 @@ func Diagnose(ctx context.Context) Diagnosis {
 		_, err = client.List(appserver.ListQuery{StateOnly: true})
 		client.Close()
 	}
-	diagnosis.AppServerError = err
+	if err != nil {
+		diagnosis.Err = fmt.Errorf("App Server: %w", err)
+	}
 	return diagnosis
 }
 
@@ -279,6 +283,9 @@ func codexBinary() string {
 
 func detectVersion(ctx context.Context, binary string) (string, error) {
 	output, err := exec.CommandContext(ctx, binary, "--version").Output()
+	if errors.Is(err, exec.ErrNotFound) {
+		return "", fmt.Errorf("Codex is %w: %s was not found", provider.ErrNotInstalled, binary)
+	}
 	if err != nil {
 		return "", fmt.Errorf("run %s --version: %w", binary, err)
 	}

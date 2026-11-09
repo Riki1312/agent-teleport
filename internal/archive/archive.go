@@ -41,14 +41,17 @@ const (
 
 // Manifest describes the session stored in an archive.
 type Manifest struct {
-	Format          string    `json:"format"`
-	FormatVersion   int       `json:"format_version"`
-	Provider        string    `json:"provider"`
-	ProviderVersion string    `json:"provider_version"`
-	SessionID       string    `json:"session_id"`
-	Workspace       string    `json:"workspace"`
-	CreatedAt       time.Time `json:"created_at"`
-	Files           []File    `json:"files"`
+	Format          string `json:"format"`
+	FormatVersion   int    `json:"format_version"`
+	Provider        string `json:"provider"`
+	ProviderVersion string `json:"provider_version"`
+	SessionID       string `json:"session_id"`
+	Workspace       string `json:"workspace"`
+	// Home is the directory where the provider stored the session on the
+	// source machine. Providers that record paths into it move them on import.
+	Home      string    `json:"home"`
+	CreatedAt time.Time `json:"created_at"`
+	Files     []File    `json:"files"`
 }
 
 // File describes one payload file listed in a manifest.
@@ -65,6 +68,7 @@ type Header struct {
 	ProviderVersion string
 	SessionID       string
 	Workspace       string
+	Home            string
 	CreatedAt       time.Time
 }
 
@@ -91,6 +95,7 @@ func New(header Header, payloads []Payload) (Archive, error) {
 		ProviderVersion: header.ProviderVersion,
 		SessionID:       header.SessionID,
 		Workspace:       header.Workspace,
+		Home:            header.Home,
 		CreatedAt:       header.CreatedAt.UTC().Truncate(time.Second),
 		Files:           make([]File, 0, len(payloads)),
 	}
@@ -274,8 +279,8 @@ func validateManifest(manifest Manifest) error {
 	if manifest.CreatedAt.IsZero() {
 		return errors.New("manifest is missing its creation time")
 	}
-	if !filepath.IsAbs(manifest.Workspace) {
-		return errors.New("manifest workspace must be an absolute path")
+	if !filepath.IsAbs(manifest.Workspace) || !filepath.IsAbs(manifest.Home) {
+		return errors.New("manifest workspace and home must be absolute paths")
 	}
 	if len(manifest.Files) == 0 || len(manifest.Files) > maxPayloadFiles {
 		return fmt.Errorf("manifest must list between 1 and %d payload files", maxPayloadFiles)

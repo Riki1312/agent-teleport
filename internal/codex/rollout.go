@@ -6,10 +6,12 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
-	"os"
 	"path/filepath"
 	"strings"
 	"time"
+
+	"github.com/Riki1312/agent-teleport/internal/fsutil"
+	"github.com/Riki1312/agent-teleport/internal/pathmap"
 )
 
 // sessionMeta is the identity recorded in a rollout's first event.
@@ -34,23 +36,9 @@ type turnState struct {
 
 // readStable reads a rollout and fails when the file changed during the read.
 func readStable(path string) ([]byte, error) {
-	before, err := os.Stat(path)
-	if err != nil {
-		return nil, fmt.Errorf("stat rollout: %w", err)
-	}
-	if !before.Mode().IsRegular() {
-		return nil, errors.New("rollout is not a regular file")
-	}
-	data, err := os.ReadFile(path)
+	data, err := fsutil.ReadStable(path)
 	if err != nil {
 		return nil, fmt.Errorf("read rollout: %w", err)
-	}
-	after, err := os.Stat(path)
-	if err != nil {
-		return nil, fmt.Errorf("stat rollout after read: %w", err)
-	}
-	if before.Size() != after.Size() || !before.ModTime().Equal(after.ModTime()) {
-		return nil, errors.New("rollout changed while it was being read")
 	}
 	return data, nil
 }
@@ -204,11 +192,9 @@ func (l layout) remapWorkspace(data []byte, targetCWD string) ([]byte, sessionMe
 // recorded. The rewrite must be reversible, so a rollout whose metadata
 // already mentions targetCWD fails.
 func (l layout) remapLines(data []byte, sourceCWD, targetCWD string) ([]byte, int, error) {
-	if !filepath.IsAbs(targetCWD) {
-		return nil, 0, errors.New("target workspace must be absolute")
-	}
-	if filepath.Dir(sourceCWD) == sourceCWD {
-		return nil, 0, errors.New("a filesystem root workspace cannot be remapped")
+	mapping, err := pathmap.New(pathmap.Move{From: sourceCWD, To: targetCWD})
+	if err != nil {
+		return nil, 0, err
 	}
 	lines := bytes.Split(data, []byte{'\n'})
 	remapped := 0
@@ -223,13 +209,12 @@ func (l layout) remapLines(data []byte, sourceCWD, targetCWD string) ([]byte, in
 		if !l.isWorkspaceEvent(kind) {
 			continue
 		}
-		rewritten, changed, err := remapStrings(line, sourceCWD, targetCWD)
+		rewritten, changed, err := mapping.Rewrite(line)
+		if errors.Is(err, pathmap.ErrIrreversible) {
+			return nil, 0, fmt.Errorf("rollout line %d already mentions %s; the workspace remap would not be reversible", index+1, targetCWD)
+		}
 		if err != nil {
 			return nil, 0, fmt.Errorf("remap rollout line %d: %w", index+1, err)
-		}
-		restored, _, err := remapStrings(rewritten, targetCWD, sourceCWD)
-		if err != nil || !bytes.Equal(restored, line) {
-			return nil, 0, fmt.Errorf("rollout line %d already mentions %s; the workspace remap would not be reversible", index+1, targetCWD)
 		}
 		lines[index] = rewritten
 		remapped += changed
@@ -304,106 +289,4 @@ func appendUnique(values []string, value string) []string {
 		}
 	}
 	return append(values, value)
-}
-
-// remapStrings rewrites every mention of sourceCWD inside the JSON strings of
-// line, returning the line and the number of strings changed. A mention must
-// start and end at a path boundary, so sibling paths such as sourceCWD-other
-// are left alone.
-func remapStrings(line []byte, sourceCWD, targetCWD string) ([]byte, int, error) {
-	var output []byte
-	copied := 0
-	changed := 0
-	for index := 0; index < len(line); index++ {
-		if line[index] != '"' {
-			continue
-		}
-		start := index
-		end := stringTokenEnd(line, start)
-		if end < 0 {
-			return nil, 0, errors.New("unterminated JSON string")
-		}
-		index = end
-		var value string
-		if err := json.Unmarshal(line[start:end+1], &value); err != nil {
-			return nil, 0, err
-		}
-		replaced := replacePath(value, sourceCWD, targetCWD)
-		if replaced == value {
-			continue
-		}
-		encoded, err := encodeString(replaced)
-		if err != nil {
-			return nil, 0, err
-		}
-		output = append(output, line[copied:start]...)
-		output = append(output, encoded...)
-		copied = end + 1
-		changed++
-	}
-	if changed == 0 {
-		return line, 0, nil
-	}
-	return append(output, line[copied:]...), changed, nil
-}
-
-// replacePath replaces each mention of path in value that is not part of a
-// longer path name.
-func replacePath(value, path, replacement string) string {
-	var output strings.Builder
-	copied := 0
-	for offset := 0; offset < len(value); {
-		found := strings.Index(value[offset:], path)
-		if found < 0 {
-			break
-		}
-		start := offset + found
-		end := start + len(path)
-		startsAtBoundary := start == 0 || !isPathNameByte(value[start-1])
-		endsAtBoundary := end == len(value) || !isPathNameByte(value[end])
-		if !startsAtBoundary || !endsAtBoundary {
-			offset = start + 1
-			continue
-		}
-		output.WriteString(value[copied:start])
-		output.WriteString(replacement)
-		copied = end
-		offset = end
-	}
-	if copied == 0 {
-		return value
-	}
-	output.WriteString(value[copied:])
-	return output.String()
-}
-
-// stringTokenEnd returns the index of the quote closing the JSON string that
-// starts at start, or -1 when the string is unterminated.
-func stringTokenEnd(line []byte, start int) int {
-	for index := start + 1; index < len(line); index++ {
-		switch line[index] {
-		case '\\':
-			index++
-		case '"':
-			return index
-		}
-	}
-	return -1
-}
-
-func isPathNameByte(character byte) bool {
-	return character == '.' || character == '_' || character == '-' ||
-		(character >= '0' && character <= '9') ||
-		(character >= 'a' && character <= 'z') ||
-		(character >= 'A' && character <= 'Z')
-}
-
-func encodeString(value string) ([]byte, error) {
-	var output bytes.Buffer
-	encoder := json.NewEncoder(&output)
-	encoder.SetEscapeHTML(false)
-	if err := encoder.Encode(value); err != nil {
-		return nil, err
-	}
-	return bytes.TrimSuffix(output.Bytes(), []byte{'\n'}), nil
 }

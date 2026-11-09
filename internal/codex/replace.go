@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/Riki1312/agent-teleport/internal/codex/appserver"
+	"github.com/Riki1312/agent-teleport/internal/fsutil"
 )
 
 // replacePhase names a persisted step of a replacement. Tests interrupt the
@@ -46,7 +47,7 @@ type checkpointFunc func(replacePhase) error
 func (l layout) recoverReplacement(destination, sessionID string, reset resetThreadFunc, repair repairThreadFunc) error {
 	rollback := rollbackPath(destination)
 	if _, err := os.Stat(rollback); errors.Is(err, os.ErrNotExist) {
-		if err := removeIfExists(stagePath(destination)); err != nil {
+		if err := fsutil.RemoveIfExists(stagePath(destination)); err != nil {
 			return fmt.Errorf("remove abandoned replacement stage: %w", err)
 		}
 		return nil
@@ -93,7 +94,7 @@ func (l layout) replaceRollout(
 
 	stage := stagePath(destination)
 	rollback := rollbackPath(destination)
-	if err := writeExclusive(stage, replacement); err != nil {
+	if err := fsutil.WriteExclusive(stage, replacement); err != nil {
 		return fmt.Errorf("stage replacement rollout: %w", err)
 	}
 	stageCommitted := false
@@ -105,7 +106,7 @@ func (l layout) replaceRollout(
 	if err := os.Link(destination, rollback); err != nil {
 		return fmt.Errorf("create replacement rollback link: %w", err)
 	}
-	if err := syncDirectory(filepath.Dir(destination)); err != nil {
+	if err := fsutil.SyncDirectory(filepath.Dir(destination)); err != nil {
 		return l.rollbackAfterError(destination, meta.ID, reset, repair, fmt.Errorf("sync replacement rollback: %w", err))
 	}
 	if err := runCheckpoint(checkpoint, phaseBackedUp); err != nil {
@@ -131,7 +132,7 @@ func (l layout) replaceRollout(
 		return l.rollbackAfterError(destination, meta.ID, reset, repair, fmt.Errorf("place replacement rollout: %w", err))
 	}
 	stageCommitted = true
-	if err := syncDirectory(filepath.Dir(destination)); err != nil {
+	if err := fsutil.SyncDirectory(filepath.Dir(destination)); err != nil {
 		return l.rollbackAfterError(destination, meta.ID, reset, repair, fmt.Errorf("sync replacement rollout: %w", err))
 	}
 	if err := runCheckpoint(checkpoint, phaseNewPlaced); err != nil {
@@ -147,7 +148,7 @@ func (l layout) replaceRollout(
 	if err := os.Remove(rollback); err != nil {
 		return fmt.Errorf("commit replacement by removing rollback link: %w", err)
 	}
-	if err := syncDirectory(filepath.Dir(destination)); err != nil {
+	if err := fsutil.SyncDirectory(filepath.Dir(destination)); err != nil {
 		return fmt.Errorf("sync committed replacement: %w", err)
 	}
 	return nil
@@ -177,13 +178,13 @@ func (l layout) restoreRollback(destination, sessionID string, reset resetThread
 	if err := reset(); err != nil && !isMissingRollout(err) {
 		return fmt.Errorf("clear interrupted replacement state: %w", err)
 	}
-	if err := removeIfExists(destination); err != nil {
+	if err := fsutil.RemoveIfExists(destination); err != nil {
 		return fmt.Errorf("remove interrupted replacement rollout: %w", err)
 	}
 	if err := os.Link(rollback, destination); err != nil {
 		return fmt.Errorf("restore rollback rollout: %w", err)
 	}
-	if err := syncDirectory(filepath.Dir(destination)); err != nil {
+	if err := fsutil.SyncDirectory(filepath.Dir(destination)); err != nil {
 		return fmt.Errorf("sync restored rollout: %w", err)
 	}
 	if err := repair(oldMeta); err != nil {
@@ -192,10 +193,10 @@ func (l layout) restoreRollback(destination, sessionID string, reset resetThread
 	if err := os.Remove(rollback); err != nil {
 		return fmt.Errorf("remove completed rollback link: %w", err)
 	}
-	if err := removeIfExists(stagePath(destination)); err != nil {
+	if err := fsutil.RemoveIfExists(stagePath(destination)); err != nil {
 		return fmt.Errorf("remove abandoned replacement stage: %w", err)
 	}
-	return syncDirectory(filepath.Dir(destination))
+	return fsutil.SyncDirectory(filepath.Dir(destination))
 }
 
 // readRolloutMeta reads the identity of the rollout at path. The history it
@@ -216,45 +217,11 @@ func runCheckpoint(checkpoint checkpointFunc, phase replacePhase) error {
 }
 
 // writeExclusive creates path with owner-only permissions and syncs its content.
-func writeExclusive(path string, data []byte) error {
-	file, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
-	if err != nil {
-		return err
-	}
-	_, err = file.Write(data)
-	if err == nil {
-		err = file.Sync()
-	}
-	if closeErr := file.Close(); err == nil {
-		err = closeErr
-	}
-	return err
-}
-
-func syncDirectory(path string) error {
-	directory, err := os.Open(path)
-	if err != nil {
-		return err
-	}
-	syncErr := directory.Sync()
-	if closeErr := directory.Close(); syncErr == nil {
-		syncErr = closeErr
-	}
-	return syncErr
-}
-
-func removeIfExists(path string) error {
-	err := os.Remove(path)
-	if errors.Is(err, os.ErrNotExist) {
-		return nil
-	}
-	return err
-}
 
 // stageSuffix and rollbackSuffix name the recovery files kept next to a
 // rollout while it is written or replaced.
 const (
-	stageSuffix    = ".agent-teleport-stage"
+	stageSuffix    = fsutil.StageSuffix
 	rollbackSuffix = ".agent-teleport-rollback"
 )
 

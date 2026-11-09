@@ -138,6 +138,7 @@ func testHeader() Header {
 		ProviderVersion: "0.154.0",
 		SessionID:       "01999999-1111-7777-8888-222222222222",
 		Workspace:       "/source/workspace",
+		Home:            "/source/home",
 		CreatedAt:       time.Now(),
 	}
 }

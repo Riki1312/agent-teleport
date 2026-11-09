@@ -35,8 +35,9 @@ Usage:
   agent-teleport export (SESSION | --last) [--all] [-o PATH|-]
 
 SESSION is a session ID, a unique ID prefix, or an exact session title.
-Only sessions whose last turn has completed can be exported. A forked
-session carries the part of each ancestor session it continues.
+Only sessions whose last turn has completed can be exported. A session
+carries its sub-agents, and a forked Codex session the part of each
+ancestor session it continues.
 
 Options:
   --last            Export the most recently updated session
@@ -57,8 +58,8 @@ Usage:
 The session is mapped to the current directory unless --cwd is given. When
 the session already exists, a copy that extends the other wins: a longer
 archive updates the local session, and a longer local session is kept.
-Copies that have diverged need --replace. Sessions open in Codex are never
-changed; close them first.
+Copies that have diverged need --replace. Sessions open in their agent are
+never changed; close them first.
 
 Options:
   --cwd PATH   Map the session to PATH instead of the current directory

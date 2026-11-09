@@ -243,6 +243,7 @@ func transferRevertedMultiAgentSession(t *testing.T, binary, codexPath, work str
 		ProviderVersion: "0.167.0",
 		SessionID:       root,
 		Workspace:       "/workspace/source",
+		Home:            "/home/source/.codex",
 		CreatedAt:       time.Now(),
 	}, payloads)
 	if err != nil {
@@ -337,6 +338,7 @@ func writeArchive(t *testing.T, path string, fixture rolloutFixture, workspace s
 		ProviderVersion: fixture.Version,
 		SessionID:       fixture.ID,
 		Workspace:       workspace,
+		Home:            "/home/source/.codex",
 		CreatedAt:       time.Now(),
 	}, []archive.Payload{{Path: fixture.Name, Data: rollout}})
 	if err != nil {
@@ -390,19 +392,37 @@ func requireCodex(t *testing.T, binary string) string {
 	if err != nil {
 		skipOrFail(t, "Codex CLI is not installed")
 	}
-	var report struct {
-		CodexVersion string `json:"codex_version"`
-		Supported    bool   `json:"supported"`
-		Error        string `json:"error"`
+	report := doctorReport(t, run(t, binary, path, t.TempDir(), nil, true, "doctor", "--json"), codex.Provider)
+	if !report.Supported {
+		skipOrFail(t, "Codex "+report.Version+" is unsupported "+report.Error)
 	}
-	output := run(t, binary, path, t.TempDir(), nil, true, "doctor", "--json")
+	return path
+}
+
+// providerReport is one provider entry of doctor output.
+type providerReport struct {
+	Provider  string `json:"provider"`
+	Version   string `json:"version"`
+	Supported bool   `json:"supported"`
+	Error     string `json:"error"`
+}
+
+// doctorReport returns the doctor entry of providerID.
+func doctorReport(t *testing.T, output []byte, providerID string) providerReport {
+	t.Helper()
+	var report struct {
+		Providers []providerReport `json:"providers"`
+	}
 	if err := json.Unmarshal(output, &report); err != nil {
 		t.Fatalf("decode doctor output: %v", err)
 	}
-	if !report.Supported {
-		skipOrFail(t, "Codex "+report.CodexVersion+" is unsupported "+report.Error)
+	for _, entry := range report.Providers {
+		if entry.Provider == providerID {
+			return entry
+		}
 	}
-	return path
+	t.Fatalf("doctor does not report %s: %s", providerID, output)
+	return providerReport{}
 }
 
 func skipOrFail(t *testing.T, reason string) {
@@ -481,14 +501,27 @@ func run(
 	return stdout.Bytes()
 }
 
+// cleanEnvironment runs agent-teleport against an isolated Codex home.
 func cleanEnvironment(home, codexPath string) []string {
-	environment := make([]string, 0, len(os.Environ())+2)
+	return isolatedEnvironment(
+		"CODEX_HOME="+home,
+		codex.BinaryEnvironment+"="+codexPath,
+	)
+}
+
+// isolatedEnvironment returns the process environment without provider homes
+// and binaries, followed by settings.
+func isolatedEnvironment(settings ...string) []string {
+	environment := make([]string, 0, len(os.Environ())+len(settings))
 	for _, value := range os.Environ() {
-		if !strings.HasPrefix(value, "CODEX_HOME=") && !strings.HasPrefix(value, codex.BinaryEnvironment+"=") {
+		name, _, _ := strings.Cut(value, "=")
+		switch name {
+		case "CODEX_HOME", codex.BinaryEnvironment:
+		default:
 			environment = append(environment, value)
 		}
 	}
-	return append(environment, "CODEX_HOME="+home, codex.BinaryEnvironment+"="+codexPath)
+	return append(environment, settings...)
 }
 
 func assertListedCWD(t *testing.T, output []byte, sessionID, want string) {
