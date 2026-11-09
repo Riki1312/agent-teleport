@@ -1,0 +1,9 @@
+.github/dependabot.yml
+  ai_agent 1-10
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.2",
+  "base_commit_sha": "2d94135a9334137ff84fd641f4982ed489ea154d",
+  "prompts": {}
+}
