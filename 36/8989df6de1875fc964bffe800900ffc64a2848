@@ -1,0 +1,37 @@
+test/e2e/plugin_test.go
+  s_b3feabb7857cd3::t_10e14a2706ba09 1-76
+plugins/agent-teleport/.claude-plugin/plugin.json
+  s_b3feabb7857cd3::t_b28d349eccf352 1-11
+context/current.md
+  s_b3feabb7857cd3::t_c2e654baedb04e 21,28-29,71
+.claude-plugin/marketplace.json
+  s_b3feabb7857cd3::t_b28d349eccf352 1-2,4-14
+  ai_agent 3
+ARCHITECTURE.md
+  s_b3feabb7857cd3::t_c2e654baedb04e 123,220-222
+test/e2e/codex_api_test.go
+  s_b3feabb7857cd3::t_10e14a2706ba09 31-39,96,101-102
+  s_b3feabb7857cd3::t_9815129cb85c15 131
+plugins/agent-teleport/skills/teleport/SKILL.md
+  s_b3feabb7857cd3::t_b28d349eccf352 1-35
+README.md
+  s_b3feabb7857cd3::t_c2e654baedb04e 20-29
+context/decisions.md
+  s_b3feabb7857cd3::t_c2e654baedb04e 43-48
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.2",
+  "base_commit_sha": "368989df6de1875fc964bffe800900ffc64a2848",
+  "prompts": {},
+  "sessions": {
+    "s_b3feabb7857cd3": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "fd1b6ebe-1b52-4a20-8b44-740169df5be6",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Riccardo <riki.brero@gmail.com>"
+    }
+  }
+}
