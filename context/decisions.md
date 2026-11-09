@@ -44,9 +44,9 @@ Each entry uses this shape:
 
 ### Support recent provider versions only
 
-- `decision`: Support the latest and recent provider versions, each verified by a sanitized fixture and the two-home test in CI. Drop older versions, their fixtures, and their code once newer support lands. Unknown versions fail closed. Unreleased formats change without migrations.
-- `rationale`: Provider storage is private and changes often; unused compatibility paths cost more than they protect.
-- `impact`: Codex 0.154.0 support is removed when the latest Codex is supported.
+- `decision`: Map each rollout layout to a range of provider versions, starting at a minimum version and tested through the newest release verified by a sanitized fixture and the two-home test in CI. Older versions fail closed; newer versions are accepted with a `doctor` warning while structural validation still rejects unknown layouts. Drop older layouts, their fixtures, and their code once newer support lands. Unreleased formats change without migrations.
+- `rationale`: Codex releases every few days; exact-version gating would break with every release, while structural validation and the CI matrix keep support honest.
+- `impact`: Codex 0.165.0 and newer are supported, tested through 0.167.0; Codex 0.154.0 support is removed.
 
 ### Let the provider repair its own state
 
@@ -56,7 +56,7 @@ Each entry uses this shape:
 
 ### Export only completed turns
 
-- `decision`: Export requires an idle or unloaded thread, a stable read, and a rollout ending with the version's completed-turn event.
+- `decision`: Export requires an idle or unloaded thread, a stable read, and a rollout in which every started turn has completed or been aborted.
 - `rationale`: App Server reports sessions owned by another CLI process as unloaded, so runtime status alone cannot prove a turn is complete.
 - `impact`: Archives always end at a resumable turn boundary.
 
@@ -74,14 +74,14 @@ Each entry uses this shape:
 
 ### Detect existing Codex sessions from rollout files
 
-- `decision`: Decide whether a session exists by searching the active and archived Codex session stores for its rollout, in imports and dry runs alike.
-- `rationale`: App Server `thread/list` omits archived threads; relying on it once duplicated an archived session and deleted it during cleanup.
+- `decision`: Decide whether a session exists by searching the active and archived Codex session stores for its rollout and recovery files, in imports and dry runs alike. Update an existing rollout where it is, and name new rollouts after their local creation time, as Codex does.
+- `rationale`: App Server `thread/list` omits archived threads, and relying on it once duplicated an archived session and deleted it during cleanup. Rollout names carry local time, so a computed path cannot identify a natively created rollout.
 - `impact`: Import never updates archived or moved copies; the user restores or deletes them in Codex first.
 
 ### Remap workspace paths string by string
 
-- `decision`: In workspace metadata events, rewrite every JSON string that equals the source workspace or lies below it, keep all other bytes, and fail when the source workspace appears in any other form. Canonicalize target workspaces, resolving symlinks in existing ancestors.
-- `rationale`: Codex records the workspace in sandbox entries and workspace roots as well as `cwd` keys, and native Codex canonicalizes paths such as `/var` and `/private/var` on macOS.
+- `decision`: In workspace metadata events, rewrite every mention of the source workspace at path boundaries inside JSON strings, keep all other bytes, and fail unless rewriting back restores the original bytes. Canonicalize target workspaces, resolving symlinks in existing ancestors.
+- `rationale`: Codex records the workspace in sandbox entries, workspace roots, `file://` URIs, and generated text as well as `cwd` keys, and native Codex canonicalizes paths such as `/var` and `/private/var` on macOS.
 - `impact`: Remapping is reversible, which repository-relative sessions rely on.
 
 ## Engineering

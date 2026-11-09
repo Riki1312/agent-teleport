@@ -93,6 +93,7 @@ func (l layout) validateRollout(data []byte) (sessionMeta, error) {
 	if err != nil {
 		return sessionMeta{}, fmt.Errorf("parse session timestamp: %w", err)
 	}
+	turnOpen, completedTurns := false, 0
 	for index, line := range lines[1:] {
 		if len(line) == 0 {
 			return sessionMeta{}, fmt.Errorf("rollout line %d is empty", index+2)
@@ -100,13 +101,20 @@ func (l layout) validateRollout(data []byte) (sessionMeta, error) {
 		if !json.Valid(line) {
 			return sessionMeta{}, fmt.Errorf("rollout line %d is not valid JSON", index+2)
 		}
+		kind, err := classifyEvent(line)
+		if err != nil {
+			return sessionMeta{}, fmt.Errorf("decode rollout line %d: %w", index+2, err)
+		}
+		switch {
+		case kind == l.turnStarted:
+			turnOpen = true
+		case l.isTurnEnd(kind):
+			turnOpen = false
+			completedTurns++
+		}
 	}
-	last, err := classifyEvent(lines[len(lines)-1])
-	if err != nil {
-		return sessionMeta{}, fmt.Errorf("decode final rollout event: %w", err)
-	}
-	if last != l.completeEvent {
-		return sessionMeta{}, errors.New("rollout does not end at a completed turn")
+	if turnOpen || completedTurns == 0 {
+		return sessionMeta{}, errors.New("rollout does not end after a completed turn")
 	}
 	return sessionMeta{ID: id, CWD: first.Payload.CWD, Timestamp: timestamp}, nil
 }
@@ -136,9 +144,11 @@ func validSessionID(id string) bool {
 }
 
 // remapWorkspace moves every workspace path in recognized metadata events from
-// the recorded workspace to targetCWD. Paths inside the workspace keep their
-// relative suffix. Only rewritten JSON strings change; all other bytes,
-// including recorded tool results, stay as recorded.
+// the recorded workspace to targetCWD, keeping the relative suffix of paths
+// inside the workspace. Only rewritten JSON strings change; all other bytes,
+// including recorded tool results, stay as recorded. The rewrite must be
+// reversible, so a rollout that already mentions targetCWD in its metadata
+// fails.
 func (l layout) remapWorkspace(data []byte, targetCWD string) ([]byte, sessionMeta, error) {
 	meta, err := l.validateRollout(data)
 	if err != nil {
@@ -146,6 +156,9 @@ func (l layout) remapWorkspace(data []byte, targetCWD string) ([]byte, sessionMe
 	}
 	if !filepath.IsAbs(targetCWD) {
 		return nil, sessionMeta{}, errors.New("target workspace must be absolute")
+	}
+	if filepath.Dir(meta.CWD) == meta.CWD {
+		return nil, sessionMeta{}, errors.New("a filesystem root workspace cannot be remapped")
 	}
 	lines := bytes.Split(data, []byte{'\n'})
 	remapped := 0
@@ -160,9 +173,13 @@ func (l layout) remapWorkspace(data []byte, targetCWD string) ([]byte, sessionMe
 		if !l.isWorkspaceEvent(kind) {
 			continue
 		}
-		rewritten, changed, err := remapPathStrings(line, meta.CWD, targetCWD)
+		rewritten, changed, err := remapStrings(line, meta.CWD, targetCWD)
 		if err != nil {
 			return nil, sessionMeta{}, fmt.Errorf("remap rollout line %d: %w", index+1, err)
+		}
+		restored, _, err := remapStrings(rewritten, targetCWD, meta.CWD)
+		if err != nil || !bytes.Equal(restored, line) {
+			return nil, sessionMeta{}, fmt.Errorf("rollout line %d already mentions %s; the workspace remap would not be reversible", index+1, targetCWD)
 		}
 		lines[index] = rewritten
 		remapped += changed
@@ -174,76 +191,101 @@ func (l layout) remapWorkspace(data []byte, targetCWD string) ([]byte, sessionMe
 	return bytes.Join(lines, []byte{'\n'}), meta, nil
 }
 
-// rolloutPath returns where Codex stores the active rollout for meta.
+// rolloutPath returns where Codex would store a new active rollout for meta.
+// Codex names rollouts after their local creation time.
 func rolloutPath(home string, meta sessionMeta) string {
-	timestamp := meta.Timestamp.UTC()
-	nameTime := timestamp.Format("2006-01-02T15-04-05")
-	name := fmt.Sprintf("rollout-%s-%s.jsonl", nameTime, meta.ID)
-	return filepath.Join(
-		home,
-		"sessions",
-		timestamp.Format("2006"),
-		timestamp.Format("01"),
-		timestamp.Format("02"),
-		name,
-	)
+	timestamp := meta.Timestamp.Local()
+	name := fmt.Sprintf("rollout-%s-%s.jsonl", timestamp.Format("2006-01-02T15-04-05"), meta.ID)
+	return filepath.Join(home, "sessions", timestamp.Format("2006"), timestamp.Format("01"), timestamp.Format("02"), name)
 }
 
-// existingRollouts returns every active or archived rollout file for sessionID.
-// Codex lists only active threads, so collision checks must inspect both stores.
-func existingRollouts(home, sessionID string) ([]string, error) {
+// storedSession lists the files Codex and agent-teleport keep for one session.
+type storedSession struct {
+	// active and archived are rollout files in the active and archived stores.
+	active   []string
+	archived []string
+	// pending are the rollout paths with a rollback link or stage file left by
+	// an interrupted write.
+	pending []string
+}
+
+// findSession searches the active and archived Codex stores for the files of
+// sessionID. Codex lists only active threads, and a rollout may have any
+// timestamp in its name, so the stores themselves are the source of truth.
+func findSession(home, sessionID string) (storedSession, error) {
+	var found storedSession
 	suffix := "-" + sessionID + ".jsonl"
-	var paths []string
-	for _, root := range []string{filepath.Join(home, "sessions"), filepath.Join(home, "archived_sessions")} {
-		err := filepath.WalkDir(root, func(path string, entry fs.DirEntry, err error) error {
+	for _, store := range []struct {
+		root  string
+		paths *[]string
+	}{
+		{root: filepath.Join(home, "sessions"), paths: &found.active},
+		{root: filepath.Join(home, "archived_sessions"), paths: &found.archived},
+	} {
+		err := filepath.WalkDir(store.root, func(path string, entry fs.DirEntry, err error) error {
 			if err != nil {
-				if path == root && errors.Is(err, fs.ErrNotExist) {
+				if path == store.root && errors.Is(err, fs.ErrNotExist) {
 					return nil
 				}
 				return err
 			}
 			name := entry.Name()
-			if !entry.IsDir() && strings.HasPrefix(name, "rollout-") && strings.HasSuffix(name, suffix) {
-				paths = append(paths, path)
+			if entry.IsDir() || !strings.HasPrefix(name, "rollout-") {
+				return nil
+			}
+			switch {
+			case strings.HasSuffix(name, suffix):
+				*store.paths = append(*store.paths, path)
+			case strings.HasSuffix(name, suffix+rollbackSuffix):
+				found.pending = appendUnique(found.pending, strings.TrimSuffix(path, rollbackSuffix))
+			case strings.HasSuffix(name, suffix+stageSuffix):
+				found.pending = appendUnique(found.pending, strings.TrimSuffix(path, stageSuffix))
 			}
 			return nil
 		})
 		if err != nil {
-			return nil, fmt.Errorf("search existing rollouts: %w", err)
+			return storedSession{}, fmt.Errorf("search stored sessions: %w", err)
 		}
 	}
-	return paths, nil
+	return found, nil
 }
 
-// remapPathStrings rewrites each JSON string in line that is sourceCWD or a
-// path below it. A string that mentions sourceCWD in any other form fails
-// closed, because a partial remap would leave the session tied to the source.
-func remapPathStrings(line []byte, sourceCWD, targetCWD string) ([]byte, int, error) {
+func appendUnique(values []string, value string) []string {
+	for _, existing := range values {
+		if existing == value {
+			return values
+		}
+	}
+	return append(values, value)
+}
+
+// remapStrings rewrites every mention of sourceCWD inside the JSON strings of
+// line, returning the line and the number of strings changed. A mention must
+// start and end at a path boundary, so sibling paths such as sourceCWD-other
+// are left alone.
+func remapStrings(line []byte, sourceCWD, targetCWD string) ([]byte, int, error) {
 	var output []byte
 	copied := 0
 	changed := 0
-	for start := 0; start < len(line); start++ {
-		if line[start] != '"' {
+	for index := 0; index < len(line); index++ {
+		if line[index] != '"' {
 			continue
 		}
+		start := index
 		end := stringTokenEnd(line, start)
 		if end < 0 {
 			return nil, 0, errors.New("unterminated JSON string")
 		}
-		token := line[start : end+1]
+		index = end
 		var value string
-		if err := json.Unmarshal(token, &value); err != nil {
+		if err := json.Unmarshal(line[start:end+1], &value); err != nil {
 			return nil, 0, err
 		}
-		suffix, ok := strings.CutPrefix(value, sourceCWD)
-		if !ok || (suffix != "" && suffix[0] != '/') {
-			if mentionsPath(value, sourceCWD) {
-				return nil, 0, errors.New("workspace path appears in an unsupported form")
-			}
-			start = end
+		replaced := replacePath(value, sourceCWD, targetCWD)
+		if replaced == value {
 			continue
 		}
-		encoded, err := encodeString(targetCWD + suffix)
+		encoded, err := encodeString(replaced)
 		if err != nil {
 			return nil, 0, err
 		}
@@ -251,12 +293,41 @@ func remapPathStrings(line []byte, sourceCWD, targetCWD string) ([]byte, int, er
 		output = append(output, encoded...)
 		copied = end + 1
 		changed++
-		start = end
 	}
 	if changed == 0 {
 		return line, 0, nil
 	}
 	return append(output, line[copied:]...), changed, nil
+}
+
+// replacePath replaces each mention of path in value that is not part of a
+// longer path name.
+func replacePath(value, path, replacement string) string {
+	var output strings.Builder
+	copied := 0
+	for offset := 0; offset < len(value); {
+		found := strings.Index(value[offset:], path)
+		if found < 0 {
+			break
+		}
+		start := offset + found
+		end := start + len(path)
+		startsAtBoundary := start == 0 || !isPathNameByte(value[start-1])
+		endsAtBoundary := end == len(value) || !isPathNameByte(value[end])
+		if !startsAtBoundary || !endsAtBoundary {
+			offset = start + 1
+			continue
+		}
+		output.WriteString(value[copied:start])
+		output.WriteString(replacement)
+		copied = end
+		offset = end
+	}
+	if copied == 0 {
+		return value
+	}
+	output.WriteString(value[copied:])
+	return output.String()
 }
 
 // stringTokenEnd returns the index of the quote closing the JSON string that
@@ -271,21 +342,6 @@ func stringTokenEnd(line []byte, start int) int {
 		}
 	}
 	return -1
-}
-
-// mentionsPath reports whether value contains path followed by a path boundary.
-func mentionsPath(value, path string) bool {
-	for offset := 0; ; {
-		found := strings.Index(value[offset:], path)
-		if found < 0 {
-			return false
-		}
-		next := offset + found + len(path)
-		if next == len(value) || !isPathNameByte(value[next]) {
-			return true
-		}
-		offset = offset + found + 1
-	}
 }
 
 func isPathNameByte(character byte) bool {

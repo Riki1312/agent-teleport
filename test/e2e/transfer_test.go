@@ -20,7 +20,7 @@ import (
 
 func TestTwoHomeTransfer(t *testing.T) {
 	binary := buildAgentTeleport(t)
-	codexPath, version := requireCodex(t, binary)
+	codexPath := requireCodex(t, binary)
 	work := testWorkDir(t)
 	sourceHome := mkdir(t, filepath.Join(work, "source-home"))
 	sourceCWD := mkdir(t, filepath.Join(work, "source-workspace"))
@@ -33,7 +33,7 @@ func TestTwoHomeTransfer(t *testing.T) {
 	replacementCWD := mkdir(t, filepath.Join(work, "replacement-workspace"))
 	pipeHome := mkdir(t, filepath.Join(work, "pipe-home"))
 	pipeCWD := mkdir(t, filepath.Join(work, "pipe-workspace"))
-	fixture := seedFixture(t, binary, codexPath, version, work, sourceHome, sourceCWD)
+	fixture := seedFixture(t, binary, codexPath, work, sourceHome, sourceCWD)
 
 	assertListedCWD(t, run(t, binary, codexPath, sourceHome, nil, true,
 		"list", "--all", "--json"), fixture.ID, sourceCWD)
@@ -56,9 +56,9 @@ func TestTwoHomeTransfer(t *testing.T) {
 	run(t, binary, codexPath, sourceHome, nil, true, "inspect", archivePath, "--json")
 
 	shortPath := filepath.Join(work, "short"+archive.Extension)
-	writeArchive(t, shortPath, version, fixture.ID, sourceCWD, completedPrefix(t, fixture.Data, 2))
+	writeArchive(t, shortPath, fixture.Version, fixture.ID, sourceCWD, completedPrefix(t, fixture.Data, 2))
 	divergedPath := filepath.Join(work, "diverged"+archive.Extension)
-	writeArchive(t, divergedPath, version, fixture.ID, sourceCWD, divergedCopy(t, fixture.Data))
+	writeArchive(t, divergedPath, fixture.Version, fixture.ID, sourceCWD, divergedCopy(t, fixture.Data))
 
 	assertOutput(t, run(t, binary, codexPath, targetHome, nil, true,
 		"import", shortPath, "--cwd", targetAlias), "imported")
@@ -132,31 +132,33 @@ func archiveSession(t *testing.T, codexPath, home, sessionID string) {
 }
 
 type rolloutFixture struct {
-	ID   string
-	Path string
-	Data []byte
+	ID      string
+	Version string
+	Path    string
+	Data    []byte
 }
 
-// seedFixture imports the sanitized fixture for version into home through the
-// CLI, mapped to cwd, and returns the rollout Codex stored.
-func seedFixture(t *testing.T, binary, codexPath, version, work, home, cwd string) rolloutFixture {
+// seedFixture imports the sanitized fixture into home through the CLI, mapped
+// to cwd, and returns the rollout Codex stored.
+func seedFixture(t *testing.T, binary, codexPath, work, home, cwd string) rolloutFixture {
 	t.Helper()
-	data, err := os.ReadFile(filepath.Join(moduleRoot(t), "testdata", "codex", version, "rollout.jsonl"))
+	data, err := os.ReadFile(filepath.Join(moduleRoot(t), "testdata", "codex", "rollout.jsonl"))
 	if err != nil {
 		t.Fatal(err)
 	}
 	firstLine, _, _ := bytes.Cut(data, []byte{'\n'})
 	var first struct {
 		Payload struct {
-			ID  string `json:"id"`
-			CWD string `json:"cwd"`
+			ID         string `json:"id"`
+			CWD        string `json:"cwd"`
+			CLIVersion string `json:"cli_version"`
 		} `json:"payload"`
 	}
 	if err := json.Unmarshal(firstLine, &first); err != nil {
 		t.Fatal(err)
 	}
 	archivePath := filepath.Join(work, "fixture"+archive.Extension)
-	writeArchive(t, archivePath, version, first.Payload.ID, first.Payload.CWD, data)
+	writeArchive(t, archivePath, first.Payload.CLIVersion, first.Payload.ID, first.Payload.CWD, data)
 	run(t, binary, codexPath, home, nil, true, "import", archivePath, "--cwd", cwd)
 	paths, err := filepath.Glob(filepath.Join(home, "sessions", "*", "*", "*", "rollout-*-"+first.Payload.ID+".jsonl"))
 	if err != nil || len(paths) != 1 {
@@ -166,7 +168,7 @@ func seedFixture(t *testing.T, binary, codexPath, version, work, home, cwd strin
 	if err != nil {
 		t.Fatal(err)
 	}
-	return rolloutFixture{ID: first.Payload.ID, Path: paths[0], Data: stored}
+	return rolloutFixture{ID: first.Payload.ID, Version: first.Payload.CLIVersion, Path: paths[0], Data: stored}
 }
 
 func writeArchive(t *testing.T, path, version, sessionID, workspace string, rollout []byte) {
@@ -221,9 +223,9 @@ func assertOutput(t *testing.T, output []byte, want string) {
 	}
 }
 
-// requireCodex returns the installed Codex binary and version when the built
-// CLI reports it as supported.
-func requireCodex(t *testing.T, binary string) (string, string) {
+// requireCodex returns the installed Codex binary when the built CLI reports it
+// as supported.
+func requireCodex(t *testing.T, binary string) string {
 	t.Helper()
 	path, err := exec.LookPath("codex")
 	if err != nil {
@@ -241,7 +243,7 @@ func requireCodex(t *testing.T, binary string) (string, string) {
 	if !report.Supported {
 		skipOrFail(t, "Codex "+report.CodexVersion+" is unsupported "+report.Error)
 	}
-	return path, report.CodexVersion
+	return path
 }
 
 func skipOrFail(t *testing.T, reason string) {

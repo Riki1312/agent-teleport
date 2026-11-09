@@ -9,7 +9,6 @@ permissions:
   contents: read
 
 env:
-  CODEX_VERSION: 0.154.0
   PRETTIER_VERSION: 3.9.10
 
 jobs:
@@ -38,6 +37,10 @@ jobs:
       fail-fast: false
       matrix:
         os: [ubuntu-latest, macos-latest]
+        # The supported range of Codex versions; keep in sync with
+        # internal/codex/layout.go.
+        codex: [0.165.0, 0.166.0, 0.167.0]
+    name: test (${{ matrix.os }}, Codex ${{ matrix.codex }})
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v7
@@ -47,7 +50,7 @@ jobs:
       - uses: actions/setup-node@v7
         with:
           node-version: lts/*
-      - run: npm install --global @openai/codex@${CODEX_VERSION}
+      - run: npm install --global @openai/codex@${{ matrix.codex }}
       - run: go test -count=1 ./...
         env:
           AGENT_TELEPORT_E2E_REQUIRED: "1"

@@ -13,9 +13,7 @@ import (
 
 const testSessionID = "01999999-1111-7777-8888-222222222222"
 
-const testVersion = "0.154.0"
-
-var testLayout = layouts[testVersion]
+var testLayout = layouts[len(layouts)-1]
 
 func TestValidateAndRemapWorkspace(t *testing.T) {
 	source := fixtureRollout("/source/workspace")
@@ -46,7 +44,7 @@ func TestValidateAndRemapWorkspace(t *testing.T) {
 }
 
 func TestRemapWorkspaceRoundTripsNativeFixture(t *testing.T) {
-	original, err := os.ReadFile(filepath.Join("..", "..", "testdata", "codex", testVersion, "rollout.jsonl"))
+	original, err := os.ReadFile(filepath.Join("..", "..", "testdata", "codex", "rollout.jsonl"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -106,11 +104,32 @@ func TestRemapWorkspacePreservesUnrelatedBytes(t *testing.T) {
 	}
 }
 
-func TestRemapWorkspaceRejectsUnsupportedPathForms(t *testing.T) {
+func TestRemapWorkspaceRewritesEmbeddedPaths(t *testing.T) {
 	source := bytes.Replace(
 		fixtureRollout("/source/workspace"),
 		[]byte(`{"payload":{"cwd":"/source/workspace"},"type":"turn_context"}`),
-		[]byte(`{"payload":{"cwd":"/source/workspace","uri":"file:///source/workspace"},"type":"turn_context"}`),
+		[]byte(`{"payload":{"cwd":"/source/workspace","uri":"file:///source/workspace","xml":"<root>/source/workspace/.git</root>","other":"/other/source/workspace"},"type":"turn_context"}`),
+		1,
+	)
+
+	// when
+	remapped, _, err := testLayout.remapWorkspace(source, "/target/workspace")
+
+	// then
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := `{"payload":{"cwd":"/target/workspace","uri":"file:///target/workspace","xml":"<root>/target/workspace/.git</root>","other":"/other/source/workspace"},"type":"turn_context"}`
+	if !bytes.Contains(remapped, []byte(want)) {
+		t.Fatalf("remapped rollout does not contain %s", want)
+	}
+}
+
+func TestRemapWorkspaceRejectsIrreversibleRewrite(t *testing.T) {
+	source := bytes.Replace(
+		fixtureRollout("/source/workspace"),
+		[]byte(`{"payload":{"cwd":"/source/workspace"},"type":"turn_context"}`),
+		[]byte(`{"payload":{"cwd":"/source/workspace","previous":"/target/workspace"},"type":"turn_context"}`),
 		1,
 	)
 
@@ -118,8 +137,29 @@ func TestRemapWorkspaceRejectsUnsupportedPathForms(t *testing.T) {
 	_, _, err := testLayout.remapWorkspace(source, "/target/workspace")
 
 	// then
-	if err == nil || !strings.Contains(err.Error(), "unsupported form") {
-		t.Fatalf("RemapWorkspace error = %v", err)
+	if err == nil || !strings.Contains(err.Error(), "reversible") {
+		t.Fatalf("remapWorkspace error = %v", err)
+	}
+}
+
+func TestValidateRolloutRejectsOpenTurn(t *testing.T) {
+	source := append(fixtureRollout("/source/workspace"), []byte(`{"type":"event_msg","payload":{"type":"task_started"}}`+"\n")...)
+
+	// when
+	_, err := testLayout.validateRollout(source)
+
+	// then
+	if err == nil || !strings.Contains(err.Error(), "completed turn") {
+		t.Fatalf("validateRollout error = %v", err)
+	}
+}
+
+func TestValidateRolloutAcceptsSettingsAfterCompletedTurn(t *testing.T) {
+	source := append(fixtureRollout("/source/workspace"), []byte(`{"type":"event_msg","payload":{"type":"thread_settings_applied"}}`+"\n")...)
+
+	// when, then
+	if _, err := testLayout.validateRollout(source); err != nil {
+		t.Fatalf("validateRollout error = %v", err)
 	}
 }
 
@@ -225,24 +265,24 @@ func TestValidateRolloutThreadAndSessionIDs(t *testing.T) {
 	}
 }
 
-func TestRolloutPath(t *testing.T) {
-	meta := sessionMeta{
-		ID:        testSessionID,
-		Timestamp: time.Date(2026, 9, 13, 9, 58, 44, 0, time.UTC),
-	}
-	want := filepath.Join("/codex", "sessions", "2026", "09", "13", "rollout-2026-09-13T09-58-44-"+testSessionID+".jsonl")
+func TestRolloutPathUsesLocalTime(t *testing.T) {
+	timestamp := time.Date(2026, 9, 13, 23, 58, 44, 0, time.UTC)
+	meta := sessionMeta{ID: testSessionID, Timestamp: timestamp}
+	local := timestamp.Local()
+	want := filepath.Join("/codex", "sessions", local.Format("2006"), local.Format("01"), local.Format("02"),
+		"rollout-"+local.Format("2006-01-02T15-04-05")+"-"+testSessionID+".jsonl")
 	if got := rolloutPath("/codex", meta); got != want {
 		t.Fatalf("RolloutPath() = %q, want %q", got, want)
 	}
 }
 
-func TestExistingRolloutsIncludesArchivedSessions(t *testing.T) {
+func TestFindSessionSearchesActiveArchivedAndPendingFiles(t *testing.T) {
 	home := t.TempDir()
 	name := "rollout-2026-09-13T09-58-44-" + testSessionID + ".jsonl"
 	active := filepath.Join(home, "sessions", "2026", "09", "13", name)
 	archived := filepath.Join(home, "archived_sessions", name)
 	unrelated := filepath.Join(home, "sessions", "2026", "09", "13", "rollout-2026-09-13T09-58-44-01999999-3333-7777-8888-444444444444.jsonl")
-	for _, path := range []string{active, archived, unrelated, active + ".agent-teleport-rollback"} {
+	for _, path := range []string{active, archived, unrelated, active + rollbackSuffix, active + stageSuffix} {
 		if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 			t.Fatal(err)
 		}
@@ -252,27 +292,24 @@ func TestExistingRolloutsIncludesArchivedSessions(t *testing.T) {
 	}
 
 	// when
-	paths, err := existingRollouts(home, testSessionID)
+	found, err := findSession(home, testSessionID)
 
 	// then
 	if err != nil {
 		t.Fatal(err)
 	}
-	slices.Sort(paths)
-	want := []string{archived, active}
-	slices.Sort(want)
-	if !slices.Equal(paths, want) {
-		t.Fatalf("existingRollouts() = %q, want %q", paths, want)
+	if !slices.Equal(found.active, []string{active}) || !slices.Equal(found.archived, []string{archived}) || !slices.Equal(found.pending, []string{active}) {
+		t.Fatalf("findSession() = %+v", found)
 	}
 }
 
-func TestExistingRolloutsWithoutSessionStores(t *testing.T) {
+func TestFindSessionWithoutSessionStores(t *testing.T) {
 	// when
-	paths, err := existingRollouts(t.TempDir(), testSessionID)
+	found, err := findSession(t.TempDir(), testSessionID)
 
 	// then
-	if err != nil || len(paths) != 0 {
-		t.Fatalf("existingRollouts() = %q, %v", paths, err)
+	if err != nil || len(found.active)+len(found.archived)+len(found.pending) != 0 {
+		t.Fatalf("findSession() = %+v, %v", found, err)
 	}
 }
 

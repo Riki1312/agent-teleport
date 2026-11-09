@@ -40,19 +40,6 @@ type repairThreadFunc func(sessionMeta) error
 // checkpointFunc runs after each persisted replacement phase.
 type checkpointFunc func(replacePhase) error
 
-// replacementPending reports whether an interrupted replacement left a rollback
-// link or stage file for destination.
-func replacementPending(destination string) (bool, error) {
-	for _, path := range []string{rollbackPath(destination), stagePath(destination)} {
-		if _, err := os.Stat(path); err == nil {
-			return true, nil
-		} else if !errors.Is(err, os.ErrNotExist) {
-			return false, err
-		}
-	}
-	return false, nil
-}
-
 // recoverReplacement rolls back any replacement of destination interrupted
 // before its commit point. Without a rollback link it only removes an abandoned
 // stage file.
@@ -254,12 +241,19 @@ func removeIfExists(path string) error {
 	return err
 }
 
+// stageSuffix and rollbackSuffix name the recovery files kept next to a
+// rollout while it is written or replaced.
+const (
+	stageSuffix    = ".agent-teleport-stage"
+	rollbackSuffix = ".agent-teleport-rollback"
+)
+
 func stagePath(destination string) string {
-	return destination + ".agent-teleport-stage"
+	return destination + stageSuffix
 }
 
 func rollbackPath(destination string) string {
-	return destination + ".agent-teleport-rollback"
+	return destination + rollbackSuffix
 }
 
 // isMissingRollout reports whether Codex rejected a delete because the thread no

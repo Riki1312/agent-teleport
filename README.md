@@ -6,7 +6,7 @@
 agent-teleport export --last -o - | ssh workstation agent-teleport import -
 ```
 
-OpenAI Codex 0.154.0 is supported today. Support for the latest Codex and Claude Code, and for keeping sessions in a repository next to their code, is in progress; see [`ARCHITECTURE.md`](ARCHITECTURE.md).
+OpenAI Codex 0.165.0 or newer is supported, tested through 0.167.0; `agent-teleport doctor` warns about newer, untested releases. Claude Code support and keeping sessions in a repository next to their code are in progress; see [`ARCHITECTURE.md`](ARCHITECTURE.md).
 
 ## Install
 

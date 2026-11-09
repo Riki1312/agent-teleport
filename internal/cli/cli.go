@@ -333,12 +333,14 @@ var dryRunSummaries = map[codex.ImportOutcome]string{
 
 // doctorReport is the JSON representation of doctor output.
 type doctorReport struct {
-	CodexHome         string   `json:"codex_home"`
-	CodexVersion      string   `json:"codex_version,omitempty"`
-	Supported         bool     `json:"supported"`
-	SupportedVersions []string `json:"supported_versions"`
-	AppServer         bool     `json:"app_server"`
-	Error             string   `json:"error,omitempty"`
+	CodexHome           string `json:"codex_home"`
+	CodexVersion        string `json:"codex_version,omitempty"`
+	Supported           bool   `json:"supported"`
+	Tested              bool   `json:"tested"`
+	MinimumVersion      string `json:"minimum_version"`
+	NewestTestedVersion string `json:"newest_tested_version"`
+	AppServer           bool   `json:"app_server"`
+	Error               string `json:"error,omitempty"`
 }
 
 func (a *App) doctor(ctx context.Context, args []string) error {
@@ -350,11 +352,13 @@ func (a *App) doctor(ctx context.Context, args []string) error {
 	}
 	diagnosis := codex.Diagnose(ctx)
 	report := doctorReport{
-		CodexHome:         diagnosis.Home,
-		CodexVersion:      diagnosis.Version,
-		Supported:         diagnosis.Supported,
-		SupportedVersions: diagnosis.SupportedVersions,
-		AppServer:         diagnosis.DetectionError == nil && diagnosis.AppServerError == nil,
+		CodexHome:           diagnosis.Home,
+		CodexVersion:        diagnosis.Version,
+		Supported:           diagnosis.Supported,
+		Tested:              diagnosis.Tested,
+		MinimumVersion:      diagnosis.MinimumVersion,
+		NewestTestedVersion: diagnosis.NewestTestedVersion,
+		AppServer:           diagnosis.DetectionError == nil && diagnosis.AppServerError == nil,
 	}
 	if diagnosis.DetectionError != nil {
 		report.Error = diagnosis.DetectionError.Error()
@@ -364,19 +368,25 @@ func (a *App) doctor(ctx context.Context, args []string) error {
 	if *asJSON {
 		return writeJSON(a.Stdout, report)
 	}
-	status := "ready"
-	switch {
-	case report.Error != "":
-		status = "error: " + report.Error
-	case !report.Supported:
-		status = "unsupported version; supported: " + strings.Join(report.SupportedVersions, ", ")
-	}
 	version := report.CodexVersion
 	if version == "" {
 		version = "not detected"
 	}
-	_, err = fmt.Fprintf(a.Stdout, "Codex\n  version: %s\n  home:    %s\n  status:  %s\n", version, report.CodexHome, status)
+	_, err = fmt.Fprintf(a.Stdout, "Codex\n  version: %s\n  home:    %s\n  status:  %s\n", version, report.CodexHome, doctorStatus(report))
 	return err
+}
+
+func doctorStatus(report doctorReport) string {
+	switch {
+	case report.Error != "":
+		return "error: " + report.Error
+	case !report.Supported:
+		return fmt.Sprintf("unsupported; agent-teleport supports Codex %s or newer", report.MinimumVersion)
+	case !report.Tested:
+		return fmt.Sprintf("ready, but untested: the newest tested version is %s; unknown history layouts are still rejected", report.NewestTestedVersion)
+	default:
+		return "ready"
+	}
 }
 
 func newFlagSet(name string) *flag.FlagSet {

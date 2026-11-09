@@ -71,7 +71,7 @@ A packed archive is a gzip-compressed tar file with the `.teleport` extension. I
   "format": "agent-teleport",
   "format_version": 1,
   "provider": "openai-codex",
-  "provider_version": "0.154.0",
+  "provider_version": "0.167.0",
   "session_id": "01a09a34-754a-7343-8d40-37a2af117f2f",
   "workspace": "/home/alice/src/example",
   "created_at": "2026-11-09T09:58:44Z",
@@ -106,8 +106,8 @@ Codex storage is a private implementation detail. The adapter prefers Codex App 
 
 ### Export
 
-1. Discover sessions through App Server `thread/list`.
-2. Require an idle or unloaded thread. App Server cannot see turns running in another Codex process, so the rollout must also end with the version's completed-turn event.
+1. Discover sessions through App Server `thread/list`, asking for every user-started source explicitly: App Server lists only interactive sources by default, which hides `codex exec` sessions.
+2. Require an idle or unloaded thread. App Server cannot see turns running in another Codex process, so every turn started in the rollout must also have ended, by completing or being aborted.
 3. Read the rollout and fail if its size or modification time changed during the read.
 4. Validate the session identity and reject layouts that one archive cannot preserve: a non-null `history_base`, which refers to other rollout files, and divergent thread and session IDs, which multi-agent child threads use.
 5. Build the archive in memory, verify it, and write it.
@@ -115,10 +115,10 @@ Codex storage is a private implementation detail. The adapter prefers Codex App 
 ### Import
 
 1. Decode and validate the whole archive in memory.
-2. Require the archive's Codex version to equal the installed version.
+2. Require the archive's Codex version and the installed version to share a rollout layout.
 3. Canonicalize the target workspace, resolving symlinks in its existing ancestors.
-4. Rewrite workspace paths: every JSON string in a workspace metadata event that equals the source workspace or lies below it. Other bytes are preserved, and a workspace path in any other form fails the import.
-5. Recover any interrupted replacement, then find existing copies in both the active and archived session stores. Codex lists only active threads, so an archived copy must be found on disk.
+4. Rewrite workspace paths: every mention of the source workspace, at path boundaries, inside the JSON strings of workspace metadata events. This covers plain paths, paths below the workspace, `file://` URIs, and paths embedded in Codex-generated text. Other bytes are preserved, and the import fails unless rewriting back would restore the original bytes.
+5. Find the session's files in the active and archived session stores, including recovery files of an interrupted replacement, and recover that replacement first. Codex lists only active threads, so the stores are the source of truth. An existing active rollout is updated where it is; a new one is named after its local creation time, as Codex names rollouts.
 6. Apply the update rule. A new rollout is written to a stage file and hard-linked into place, so Codex never sees a partial file and an existing one is never overwritten.
 7. Let App Server scan and repair its state, then require the scan, the state database, and `thread/read` to agree on the session and its workspace. A failed verification deletes the new session again.
 
@@ -138,9 +138,9 @@ Any failure or interruption before the commit point restores the old rollout, de
 
 ### Supported versions
 
-Each supported Codex version maps to a verified rollout layout: its completed-turn event and its workspace metadata events. Unknown versions fail closed with a diagnostic from `doctor`. Support targets the latest and recent Codex releases; adding a version requires a sanitized fixture that passes the two-home test against that exact Codex CLI, and older versions are removed rather than kept.
+Each rollout layout covers a range of Codex versions: its turn boundary events and its workspace metadata events. The current layout starts at Codex 0.165.0 and is tested through 0.167.0. Older versions fail closed. Newer versions are accepted with a `doctor` warning, because Codex releases every few days, while structural validation still rejects rollouts it does not recognize. CI runs the two-home test against every tested version, and raising the tested range requires it to pass against the new release. Older layouts are removed rather than kept.
 
-Codex 0.154.0 is supported today. Modern Codex histories span several physical rollout files and need multi-file payloads before newer versions can be enabled.
+Standalone sessions are supported. Forks and other histories that span several rollout files, and multi-agent child threads, are rejected until multi-file payloads are implemented. Codex App Server can fork a thread natively with `thread/fork`, which repository sessions will use for `save --as`.
 
 ## Repository sessions (planned)
 
@@ -172,7 +172,7 @@ Session histories can contain prompts, model output, commands, tool results, fil
 ## Testing
 
 - Unit tests cover archive validation, rollout validation and remapping, the update rule, replacement recovery, and CLI parsing.
-- A two-home end-to-end test drives the built binary against a native Codex CLI and a sanitized fixture, without credentials or model calls: export, inspect, piped transfer, every update outcome, replacement recovery, archived sessions, and resume after repair. CI installs the pinned supported Codex version on Linux and macOS and requires this test.
+- A two-home end-to-end test drives the built binary against a native Codex CLI and a sanitized fixture, without credentials or model calls: export, inspect, piped transfer, every update outcome, replacement recovery, archived sessions, and resume after repair. CI installs every tested Codex version on Linux and macOS and requires this test against each.
 - Tests that need authentication or model calls are opt-in smoke tests, never pull-request gates.
 
 ## Design principles

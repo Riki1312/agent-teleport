@@ -65,11 +65,7 @@ func TestRecoverReplacementAfterEveryCheckpoint(t *testing.T) {
 			if !errors.As(err, &interrupted) {
 				t.Fatalf("replaceRollout error = %v", err)
 			}
-			pending, err := replacementPending(destination)
-			if err != nil {
-				t.Fatal(err)
-			}
-			if !pending {
+			if !exists(rollbackPath(destination)) && !exists(stagePath(destination)) {
 				t.Fatal("interrupted replacement has no recovery marker")
 			}
 			if err := testLayout.recoverReplacement(destination, newMeta.ID, state.reset, state.repair); err != nil {
@@ -156,6 +152,11 @@ func assertFileEquals(t *testing.T, path string, want []byte) {
 	if string(got) != string(want) {
 		t.Fatalf("file %s does not match expected rollout", path)
 	}
+}
+
+func exists(path string) bool {
+	_, err := os.Stat(path)
+	return err == nil
 }
 
 func assertMissing(t *testing.T, path string) {

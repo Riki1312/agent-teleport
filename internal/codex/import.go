@@ -55,14 +55,17 @@ func (s *Store) Import(request ImportRequest) (ImportResult, error) {
 	if err != nil {
 		return ImportResult{}, err
 	}
-	destination := rolloutPath(s.home, meta)
+	stored, err := findSession(s.home, meta.ID)
+	if err != nil {
+		return ImportResult{}, err
+	}
+	destination, err := importDestination(stored, s.home, meta)
+	if err != nil {
+		return ImportResult{}, err
+	}
 	var client *appserver.Client
 	if request.DryRun {
-		pending, err := replacementPending(destination)
-		if err != nil {
-			return ImportResult{}, fmt.Errorf("inspect replacement recovery state: %w", err)
-		}
-		if pending {
+		if len(stored.pending) > 0 {
 			return ImportResult{}, errors.New("an interrupted replacement requires recovery; rerun without --dry-run")
 		}
 	} else {
@@ -72,8 +75,11 @@ func (s *Store) Import(request ImportRequest) (ImportResult, error) {
 		if err := s.layout.recoverReplacement(destination, meta.ID, resetThread(client, meta.ID), repairThread(client)); err != nil {
 			return ImportResult{}, err
 		}
+		if stored, err = findSession(s.home, meta.ID); err != nil {
+			return ImportResult{}, err
+		}
 	}
-	outcome, err := s.planImport(destination, rollout, meta, request.Replace)
+	outcome, err := s.planImport(stored, destination, rollout, meta, request.Replace)
 	if err != nil {
 		return ImportResult{}, err
 	}
@@ -100,8 +106,8 @@ func (s *Store) prepareRollout(source archive.Archive, workspace string) ([]byte
 	if err != nil {
 		return nil, sessionMeta{}, err
 	}
-	if source.Manifest.ProviderVersion != s.version {
-		return nil, sessionMeta{}, fmt.Errorf("archive Codex version %s is incompatible with installed version %s", source.Manifest.ProviderVersion, s.version)
+	if sourceLayout.minimum != s.layout.minimum {
+		return nil, sessionMeta{}, fmt.Errorf("archive from Codex %s uses a rollout layout that Codex %s does not read", source.Manifest.ProviderVersion, s.version)
 	}
 	meta, err := sourceLayout.validateRollout(rollout)
 	if err != nil {
@@ -117,17 +123,32 @@ func (s *Store) prepareRollout(source archive.Archive, workspace string) ([]byte
 	return rollout, meta, nil
 }
 
-// planImport decides how to import rollout without changing local state.
-func (s *Store) planImport(destination string, rollout []byte, meta sessionMeta, replace bool) (ImportOutcome, error) {
-	existing, err := existingRollouts(s.home, meta.ID)
-	if err != nil {
-		return "", err
+// importDestination returns the rollout path an import writes: the path of an
+// interrupted write, the existing active rollout, or a new path named the way
+// Codex names it.
+func importDestination(stored storedSession, home string, meta sessionMeta) (string, error) {
+	switch {
+	case len(stored.pending) > 1:
+		return "", fmt.Errorf("session %s has several interrupted writes: %s", meta.ID, strings.Join(stored.pending, ", "))
+	case len(stored.pending) == 1:
+		return stored.pending[0], nil
+	case len(stored.active) == 1:
+		return stored.active[0], nil
+	default:
+		return rolloutPath(home, meta), nil
 	}
-	if len(existing) == 0 {
+}
+
+// planImport decides how to import rollout without changing local state.
+func (s *Store) planImport(stored storedSession, destination string, rollout []byte, meta sessionMeta, replace bool) (ImportOutcome, error) {
+	if len(stored.archived) > 0 {
+		return "", fmt.Errorf("session %s is archived at %s; restore or delete it in Codex before importing it", meta.ID, strings.Join(stored.archived, ", "))
+	}
+	if len(stored.active) == 0 {
 		return Imported, nil
 	}
-	if err := requireReplaceable(existing, destination, meta.ID); err != nil {
-		return "", err
+	if len(stored.active) > 1 || filepath.Clean(stored.active[0]) != filepath.Clean(destination) {
+		return "", fmt.Errorf("session %s has several rollouts: %s", meta.ID, strings.Join(stored.active, ", "))
 	}
 	local, localMeta, err := s.layout.stableRollout(destination)
 	if err != nil {
@@ -194,7 +215,7 @@ func (s *Store) placeNew(client *appserver.Client, destination string, rollout [
 // replaceExisting replaces a quiescent local session through the recoverable
 // replacement transaction.
 func (s *Store) replaceExisting(client *appserver.Client, destination string, rollout []byte, meta sessionMeta) error {
-	threads, err := client.List("", false)
+	threads, err := client.List(appserver.ListQuery{SourceKinds: allSources})
 	if err != nil {
 		return fmt.Errorf("check existing session: %w", err)
 	}
@@ -217,15 +238,6 @@ func resetThread(client *appserver.Client, sessionID string) resetThreadFunc {
 
 func repairThread(client *appserver.Client) repairThreadFunc {
 	return func(meta sessionMeta) error { return verifyRepair(client, meta.ID, meta.CWD) }
-}
-
-// requireReplaceable allows updating only one active rollout at the expected
-// destination; archived or moved copies must be handled in Codex first.
-func requireReplaceable(existing []string, destination, sessionID string) error {
-	if len(existing) == 1 && filepath.Clean(existing[0]) == filepath.Clean(destination) {
-		return nil
-	}
-	return fmt.Errorf("session %s exists at %s; restore or delete it in Codex before importing it", sessionID, strings.Join(existing, ", "))
 }
 
 // placeRollout writes a new rollout through the stage file and links it into
@@ -257,7 +269,7 @@ func (s *Store) placeRollout(destination string, rollout []byte) error {
 // verifyRepair lets Codex scan and repair the session, then requires that the
 // scan, the persisted state, and a thread read all report the target workspace.
 func verifyRepair(client *appserver.Client, id, cwd string) error {
-	threads, err := client.List("", false)
+	threads, err := client.List(appserver.ListQuery{SourceKinds: allSources})
 	if err != nil {
 		return err
 	}
@@ -265,7 +277,7 @@ func verifyRepair(client *appserver.Client, id, cwd string) error {
 	if thread == nil {
 		return errors.New("Codex App Server did not discover the imported session")
 	}
-	stateThreads, err := client.List("", true)
+	stateThreads, err := client.List(appserver.ListQuery{StateOnly: true, SourceKinds: allSources})
 	if err != nil {
 		return err
 	}

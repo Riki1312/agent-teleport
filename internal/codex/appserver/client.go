@@ -104,10 +104,20 @@ func (c *Client) Close() {
 	_ = c.command.Wait()
 }
 
-// List returns every thread, newest first, optionally limited to one cwd.
-// A normal listing lets Codex scan and repair its state from rollout files;
-// stateOnly reads only the persisted state database.
-func (c *Client) List(cwd string, stateOnly bool) ([]Thread, error) {
+// ListQuery selects the threads List returns.
+type ListQuery struct {
+	// CWD limits the listing to one workspace when it is not empty.
+	CWD string
+	// StateOnly reads only the persisted state database; otherwise Codex may
+	// scan and repair its state from rollout files.
+	StateOnly bool
+	// SourceKinds limits the listing to threads started by these sources, such
+	// as "cli" or "exec". App Server lists only interactive sources by default.
+	SourceKinds []string
+}
+
+// List returns every thread that matches query, newest first.
+func (c *Client) List(query ListQuery) ([]Thread, error) {
 	var result []Thread
 	var cursor any
 	for {
@@ -116,10 +126,13 @@ func (c *Client) List(cwd string, stateOnly bool) ([]Thread, error) {
 			"limit":          100,
 			"sortKey":        "updated_at",
 			"sortDirection":  "desc",
-			"useStateDbOnly": stateOnly,
+			"useStateDbOnly": query.StateOnly,
 		}
-		if cwd != "" {
-			params["cwd"] = cwd
+		if query.CWD != "" {
+			params["cwd"] = query.CWD
+		}
+		if len(query.SourceKinds) > 0 {
+			params["sourceKinds"] = query.SourceKinds
 		}
 		raw, err := c.call("thread/list", params)
 		if err != nil {

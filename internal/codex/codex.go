@@ -30,6 +30,14 @@ const BinaryEnvironment = "AGENT_TELEPORT_CODEX"
 // rolloutPayload is the archive path of a session's rollout file.
 const rolloutPayload = "rollout.jsonl"
 
+// userSources are the thread sources a person starts and can resume.
+// Sub-agent threads belong to their parent session and are not listed.
+var userSources = []string{"cli", "vscode", "exec", "appServer"}
+
+// allSources are every thread source App Server reports, used to verify that
+// an imported session is discovered whatever started it.
+var allSources = []string{"cli", "vscode", "exec", "appServer", "subAgent", "subAgentReview", "subAgentCompact", "subAgentThreadSpawn", "subAgentOther", "unknown"}
+
 // Store is the local Codex installation. It starts App Server on first use and
 // keeps it running until Close.
 type Store struct {
@@ -55,10 +63,15 @@ type Session struct {
 
 // Diagnosis describes the local Codex installation without changing it.
 type Diagnosis struct {
-	Home              string
-	Version           string
-	Supported         bool
-	SupportedVersions []string
+	Home    string
+	Version string
+	// Supported reports whether the version has a known rollout layout, and
+	// Tested whether it is within the range verified by the two-home test.
+	Supported bool
+	Tested    bool
+	// MinimumVersion and NewestTestedVersion bound the verified range.
+	MinimumVersion      string
+	NewestTestedVersion string
 	// DetectionError reports why the Codex home or version could not be found.
 	DetectionError error
 	// AppServerError reports why App Server could not start or list threads.
@@ -76,7 +89,7 @@ func Open(ctx context.Context) (*Store, error) {
 	if err != nil {
 		return nil, err
 	}
-	layout, err := layoutFor(version)
+	layout, _, err := layoutFor(version)
 	if err != nil {
 		return nil, err
 	}
@@ -96,7 +109,7 @@ func (s *Store) Sessions(workspace string) ([]Session, error) {
 	if err != nil {
 		return nil, err
 	}
-	threads, err := client.List(workspace, false)
+	threads, err := client.List(appserver.ListQuery{CWD: workspace, SourceKinds: userSources})
 	if err != nil {
 		return nil, fmt.Errorf("list Codex sessions: %w", err)
 	}
@@ -160,7 +173,7 @@ func ValidateArchive(source archive.Archive) error {
 
 // Diagnose reports the local Codex installation and whether App Server starts.
 func Diagnose(ctx context.Context) Diagnosis {
-	diagnosis := Diagnosis{SupportedVersions: supportedVersions()}
+	diagnosis := Diagnosis{MinimumVersion: layouts[0].minimum, NewestTestedVersion: layouts[len(layouts)-1].newestTested}
 	diagnosis.Home, diagnosis.DetectionError = codexHome()
 	if diagnosis.DetectionError != nil {
 		return diagnosis
@@ -170,11 +183,12 @@ func Diagnose(ctx context.Context) Diagnosis {
 	if diagnosis.DetectionError != nil {
 		return diagnosis
 	}
-	_, layoutErr := layoutFor(diagnosis.Version)
+	_, tested, layoutErr := layoutFor(diagnosis.Version)
 	diagnosis.Supported = layoutErr == nil
+	diagnosis.Tested = tested
 	client, err := appserver.Start(ctx, binary, diagnosis.Home)
 	if err == nil {
-		_, err = client.List("", true)
+		_, err = client.List(appserver.ListQuery{StateOnly: true})
 		client.Close()
 	}
 	diagnosis.AppServerError = err
@@ -205,7 +219,7 @@ func validateArchive(source archive.Archive) (layout, []byte, error) {
 	if !ok {
 		return layout{}, nil, fmt.Errorf("Codex archive is missing %s", rolloutPayload)
 	}
-	sourceLayout, err := layoutFor(source.Manifest.ProviderVersion)
+	sourceLayout, _, err := layoutFor(source.Manifest.ProviderVersion)
 	if err != nil {
 		return layout{}, nil, err
 	}
