@@ -4,6 +4,7 @@
 package cli
 
 import (
+	"bufio"
 	"context"
 	"encoding/json"
 	"errors"
@@ -14,6 +15,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"text/tabwriter"
 	"time"
@@ -35,6 +37,9 @@ type App struct {
 	Stdout io.Writer
 	Stderr io.Writer
 	Now    func() time.Time
+	// Interactive reports that a person answers prompts on Stdin and reads
+	// them on Stderr, so a command without a session asks for one.
+	Interactive bool
 }
 
 // UsageError reports invalid command-line usage; the process exits with status 2.
@@ -46,7 +51,7 @@ func (e *UsageError) Error() string { return e.Message }
 
 // New returns an App bound to the process streams and clock.
 func New() *App {
-	return &App{Stdin: os.Stdin, Stdout: os.Stdout, Stderr: os.Stderr, Now: time.Now}
+	return &App{Stdin: os.Stdin, Stdout: os.Stdout, Stderr: os.Stderr, Now: time.Now, Interactive: isTerminal(os.Stdin) && isTerminal(os.Stderr)}
 }
 
 // Run executes the command named by args[0].
@@ -77,6 +82,10 @@ func (a *App) Run(ctx context.Context, args []string) error {
 		return a.status(ctx, args[1:])
 	case "doctor":
 		return a.doctor(ctx, args[1:])
+	case "completion":
+		return a.completion(args[1:])
+	case "__complete":
+		return a.complete(ctx, args[1:])
 	default:
 		return &UsageError{Message: fmt.Sprintf("unknown command %q\n\n%s", args[0], usage)}
 	}
@@ -169,7 +178,7 @@ func (a *App) export(ctx context.Context, args []string) error {
 	if err != nil {
 		return usageOrHelp(err, "")
 	}
-	selector, err := sessionSelector(positional, *last, exportUsage)
+	selector, err := a.sessionSelector(positional, *last)
 	if err != nil {
 		return err
 	}
@@ -283,8 +292,8 @@ func (a *App) importArchive(ctx context.Context, args []string) error {
 	if err != nil || len(positional) != 1 {
 		return usageOrHelp(err, "import requires exactly one archive path or -")
 	}
-	if *dryRun && *resume {
-		return &UsageError{Message: "--dry-run and --resume cannot be used together"}
+	if err := resumeAllowed(*dryRun, *resume); err != nil {
+		return err
 	}
 	if positional[0] == "-" && *resume {
 		return &UsageError{Message: "--resume needs a terminal, so it cannot be used with an archive from stdin"}
@@ -309,6 +318,18 @@ func (a *App) importArchive(ctx context.Context, args []string) error {
 	return a.importInto(adapter, store, provider.ImportRequest{Archive: source, Workspace: workspace, Replace: *replace, DryRun: *dryRun}, *resume)
 }
 
+// resumeAllowed rejects --resume where it cannot work: in a dry run, and
+// inside an agent, where it would start a second agent inside the first.
+func resumeAllowed(dryRun, resume bool) error {
+	switch {
+	case dryRun && resume:
+		return &UsageError{Message: "--dry-run and --resume cannot be used together"}
+	case resume && insideAgent():
+		return &UsageError{Message: "--resume cannot run inside Codex or Claude Code; switch to the session with the agent's /resume command instead"}
+	}
+	return nil
+}
+
 // importInto imports into store, reports the outcome and the command that
 // resumes the session, and runs that command when resume is set.
 func (a *App) importInto(adapter provider.Adapter, store provider.Store, request provider.ImportRequest, resume bool) error {
@@ -325,6 +346,11 @@ func (a *App) importInto(adapter provider.Adapter, store provider.Store, request
 	resumeCommand := store.ResumeCommand(result.SessionID, result.Workspace)
 	if _, err := fmt.Fprintf(a.Stdout, "resume with: %s\n", displayCommand(resumeCommand)); err != nil {
 		return err
+	}
+	if _, inside := adapter.Current(); inside {
+		if _, err := fmt.Fprintf(a.Stdout, "or switch to it in this chat: %s\n", adapter.Switch(result.SessionID)); err != nil {
+			return err
+		}
 	}
 	if !resume {
 		return nil
@@ -550,12 +576,12 @@ func (a *App) sessions(opened stores, includeAll bool) ([]provider.Session, erro
 
 // sessionSelector returns the session selector among positional, which holds
 // at most one, and none together with last. An empty selector without last
-// selects the current session.
-func sessionSelector(positional []string, last bool, commandUsage string) (string, error) {
+// selects the current session inside an agent, or asks for one at a terminal.
+func (a *App) sessionSelector(positional []string, last bool) (string, error) {
 	switch {
 	case len(positional) > 1:
 		return "", &UsageError{Message: "at most one session selector is accepted"}
-	case len(positional) == 0 && !last && !insideAgent():
+	case len(positional) == 0 && !last && !insideAgent() && !a.Interactive:
 		return "", errNoSelection
 	case len(positional) == 1 && last:
 		return "", &UsageError{Message: "SESSION and --last cannot be used together"}
@@ -571,12 +597,15 @@ func sessionSelector(positional []string, last bool, commandUsage string) (strin
 // session ID is also looked up when no provider lists it. Without a selector
 // it selects the session of the agent that runs agent-teleport.
 func (a *App) selectStoredSession(opened stores, selector string, last, includeAll bool) (provider.Session, error) {
-	if selector == "" && !last {
+	if selector == "" && !last && insideAgent() {
 		return opened.current()
 	}
 	sessions, err := a.sessions(opened, includeAll)
 	if err != nil {
 		return provider.Session{}, err
+	}
+	if selector == "" && !last {
+		return a.chooseSession(sessions, includeAll)
 	}
 	session, err := selectSession(sessions, selector, last)
 	if errors.Is(err, errNoMatch) && isSessionID(selector) {
@@ -585,9 +614,63 @@ func (a *App) selectStoredSession(opened stores, selector string, last, includeA
 	return session, err
 }
 
+// chooseSession asks the person at the terminal to choose one of sessions.
+func (a *App) chooseSession(sessions []provider.Session, includeAll bool) (provider.Session, error) {
+	if len(sessions) == 0 {
+		if includeAll {
+			return provider.Session{}, errors.New("no sessions found")
+		}
+		return provider.Session{}, errors.New("no sessions found in this directory; use --all to choose from every directory")
+	}
+	var rows strings.Builder
+	writer := tabwriter.NewWriter(&rows, 0, 4, 2, ' ', 0)
+	now := a.Now()
+	for index, session := range sessions {
+		columns := []string{fmt.Sprintf("%3d", index+1), relativeTime(now, session.UpdatedAt), adapterFor(session.Provider).Command, shortID(session.ID)}
+		if includeAll {
+			columns = append(columns, session.Workspace)
+		}
+		_, _ = fmt.Fprintln(writer, strings.Join(append(columns, shorten(session.Title)), "\t"))
+	}
+	_ = writer.Flush()
+	choice, err := a.choose("Session", strings.Split(strings.TrimSuffix(rows.String(), "\n"), "\n"))
+	if err != nil {
+		return provider.Session{}, err
+	}
+	return sessions[choice], nil
+}
+
+// choose prints numbered rows on stderr and returns the index of the row the
+// person at the terminal chooses.
+func (a *App) choose(subject string, rows []string) (int, error) {
+	for _, row := range rows {
+		if _, err := fmt.Fprintln(a.Stderr, row); err != nil {
+			return 0, err
+		}
+	}
+	if _, err := fmt.Fprintf(a.Stderr, "%s [1-%d]: ", subject, len(rows)); err != nil {
+		return 0, err
+	}
+	line, err := bufio.NewReader(a.Stdin).ReadString('\n')
+	if err != nil && (!errors.Is(err, io.EOF) || line == "") {
+		return 0, errors.New("nothing was chosen")
+	}
+	number, err := strconv.Atoi(strings.TrimSpace(line))
+	if err != nil || number < 1 || number > len(rows) {
+		return 0, fmt.Errorf("choose a number from 1 to %d", len(rows))
+	}
+	return number - 1, nil
+}
+
+// isTerminal reports whether file is a terminal.
+func isTerminal(file *os.File) bool {
+	info, err := file.Stat()
+	return err == nil && info.Mode()&os.ModeCharDevice != 0
+}
+
 // errNoSelection reports a command that needs a session but was given none
 // outside an agent.
-var errNoSelection = &UsageError{Message: "name a SESSION or pass --last; inside Codex or Claude Code, the current session is the default"}
+var errNoSelection = &UsageError{Message: "name a SESSION or pass --last; at a terminal you are asked to choose one, and inside Codex or Claude Code the current session is the default"}
 
 // insideAgent reports whether an agent runs agent-teleport.
 func insideAgent() bool {
@@ -645,19 +728,40 @@ func selectSession(sessions []provider.Session, selector string, last bool) (pro
 		}
 		return sessions[0], nil
 	}
-	var matches []provider.Session
-	for _, session := range sessions {
-		if strings.HasPrefix(session.ID, selector) || session.Title == selector {
-			matches = append(matches, session)
+	// The most precise kind of match wins: an ID prefix, then an exact title,
+	// then a part of a title in any case.
+	for _, matches := range []func(provider.Session) bool{
+		func(session provider.Session) bool { return strings.HasPrefix(session.ID, selector) },
+		func(session provider.Session) bool { return session.Title == selector },
+		func(session provider.Session) bool {
+			return strings.Contains(strings.ToLower(session.Title), strings.ToLower(selector))
+		},
+	} {
+		var found []provider.Session
+		for _, session := range sessions {
+			if matches(session) {
+				found = append(found, session)
+			}
+		}
+		switch {
+		case len(found) == 1:
+			return found[0], nil
+		case len(found) > 1:
+			return provider.Session{}, ambiguousSelector(selector, found)
 		}
 	}
-	if len(matches) == 0 {
-		return provider.Session{}, fmt.Errorf("%w %q", errNoMatch, selector)
+	return provider.Session{}, fmt.Errorf("%w %q", errNoMatch, selector)
+}
+
+// ambiguousSelector reports the sessions a selector matches, so that one can
+// be chosen by its ID.
+func ambiguousSelector(selector string, matches []provider.Session) error {
+	var message strings.Builder
+	fmt.Fprintf(&message, "session selector %q matches %d sessions; use an ID:", selector, len(matches))
+	for _, session := range matches {
+		fmt.Fprintf(&message, "\n  %s  %s", shortID(session.ID), shorten(session.Title))
 	}
-	if len(matches) > 1 {
-		return provider.Session{}, fmt.Errorf("session selector %q is ambiguous", selector)
-	}
-	return matches[0], nil
+	return errors.New(message.String())
 }
 
 // adapterFor returns the adapter of a provider ID reported by a store.

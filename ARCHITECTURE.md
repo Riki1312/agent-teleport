@@ -33,17 +33,19 @@ agent-teleport export  [SESSION | --last] [--all] [-o PATH|-]
 agent-teleport import  (ARCHIVE | -) [--cwd PATH] [--replace] [--dry-run] [--resume]
 agent-teleport inspect (ARCHIVE | -) [--json]
 agent-teleport save    [SESSION | --last] [--all] [--name NAME] [--allow-secrets]
-agent-teleport open    NAME [--replace] [--dry-run] [--resume]
+agent-teleport open    [NAME] [--replace] [--dry-run] [--resume]
 agent-teleport status  [--json]
 agent-teleport doctor  [--json]
+agent-teleport completion (bash | zsh)
 ```
 
 - `list` shows the sessions of the current directory, or of every directory with `--all`, newest first. `--json` is the stable automation interface.
-- `export` accepts a session ID, a unique ID prefix, or an exact title; inside Codex or Claude Code, the current session is the default. A turn in progress is left out. Without `-o` it writes `<title>-<id>.teleport` to the current directory; `-o -` writes the archive to stdout and every diagnostic to stderr.
+- `export` accepts a unique ID prefix, an exact title, or a unique part of a title in any case, tried in that order. Without one, the current session is the default inside Codex or Claude Code, and at a terminal the person chooses from a numbered list; elsewhere the command fails. A turn in progress is left out. Without `-o` it writes `<title>-<id>.teleport` to the current directory; `-o -` writes the archive to stdout and every diagnostic to stderr.
 - `import` maps the session to the current directory unless `--cwd` names another one. It prints the command that resumes the session, and runs it with `--resume`.
 - `inspect` validates an archive, describes its session, and reports whether it can be imported into the current directory. It never changes local state.
 - `save`, `open`, and `status` keep sessions in the current Git repository; see [Repository sessions](#repository-sessions).
 - `doctor` reports the detected agents, their versions, and whether they are supported.
+- `completion` prints a bash or zsh script that asks the hidden `__complete` command for candidates: commands, the options each help text lists, session IDs described by their titles, saved session names, and archive paths.
 
 Usage errors exit with status 2 and other failures with status 1.
 
@@ -212,7 +214,7 @@ Sessions can be kept in a Git repository, next to the code they discuss, and sha
 - A saved session is an unpacked archive under `.agent-teleport/sessions/<name>/`: the manifest, followed by the payload files at their payload paths, which Git stores and diffs efficiently because transcripts only grow at the end. The manifest also records the commit and branch checked out when it was saved.
 - Saved paths are relative to the repository. `save` moves the repository root to the placeholder `/agent-teleport/repository` and the provider's home to `/agent-teleport/home`, in every record, and `open` moves them to the local checkout and agent home. The session's workspace must be inside the repository.
 - `save` applies the update rule against the saved copy: a longer local session replaces it, an equal one is left alone, a longer saved copy must be opened first, and a diverged one is refused with two ways out: `open --replace`, or a fork made in the agent and saved under another `--name`.
-- `open` imports the saved copy into its place in the checkout, with the same rule and options as `import`.
+- `open` imports the saved copy into its place in the checkout, with the same rule and options as `import`. Run by an agent, it prints how to switch to the session in the chat: `/resume <id>` in Claude Code, and `/resume` in Codex, which opens its picker. `--resume` is refused there, because it would start a second agent inside the first.
 - `status` reports each saved session as in sync, local ahead, repository ahead, diverged, or not opened. Like `save`, it compares through a dry-run import, so it never changes a session.
 - Saving refuses likely credentials in what it adds, unless `--allow-secrets` is given; see `context/decisions.md` for the patterns.
 - A save is written to a hidden sibling directory, verified, and swapped in with renames; the next command restores the previous copy if a swap was interrupted. The first save creates `.agent-teleport/.gitattributes`, which keeps sessions byte for byte in every checkout and marks them as generated, so code review collapses their diffs.

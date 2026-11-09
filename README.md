@@ -25,7 +25,7 @@ codex plugin marketplace add Riki1312/agent-teleport                  # in a she
 codex plugin add agent-teleport@agent-teleport
 ```
 
-Then ask, for example, "save this session to the repo". Inside an agent, `agent-teleport save` and `export` select the current session on their own, up to the turn that runs them.
+Then ask, for example, "save this session to the repo" or "open the fix-login session". After opening, switch to the session in the same chat with `/resume`. Inside an agent, `agent-teleport save` and `export` select the current session on their own, up to the turn that runs them.
 
 ## Usage
 
@@ -37,7 +37,7 @@ agent-teleport import session.teleport         # maps the session to this direct
 agent-teleport import session.teleport --cwd ~/src/project --resume
 ```
 
-Run `agent-teleport <command> --help` for every option.
+Run `agent-teleport <command> --help` for every option. Without a session, `export` and `save` let you choose one from a numbered list, and a part of a title selects a session too. For tab completion, add `eval "$(agent-teleport completion bash)"` to `~/.bashrc`, or `source <(agent-teleport completion zsh)` to `~/.zshrc`.
 
 ### Sessions in a repository
 

@@ -24,7 +24,7 @@ When the save reports that the saved copy is newer, or that the copies have dive
 ## Check and open saved sessions
 
 - `agent-teleport status` lists each saved session as in sync, local ahead, repository ahead, diverged, or not opened.
-- `agent-teleport open NAME` adds a saved session to the agent on this machine. It prints the command that resumes it; the user runs that command in a new terminal, because a session cannot be resumed inside another one.
+- `agent-teleport open NAME` adds a saved session to the agent on this machine. It prints how to switch to it in this chat, such as typing `/resume` with the session ID, and the command that resumes it in a new terminal; relay both. Only the user can switch sessions, so never pass `--resume`.
 
 ## Export to a file
 

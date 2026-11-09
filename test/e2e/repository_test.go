@@ -46,6 +46,7 @@ func TestClaudeRepositorySession(t *testing.T) {
 		return runIn(t, binary, target.agentTeleportEnvironment(), clone, nil, wantSuccess, args...)
 	}
 	assertStates(t, atClone(true, "status", "--json"), map[string]string{"spawn": "not-opened"})
+	assertOutput(t, atClone(true, "__complete", "open", ""), "spawn")
 	assertOutput(t, atClone(true, "open", "spawn"), "imported Claude Code session")
 	assertStates(t, atClone(true, "status", "--json"), map[string]string{"spawn": "in-sync"})
 	opened := target.request(t, clone, "--resume", sessionID, "continue in the clone")
@@ -83,7 +84,11 @@ func TestClaudeRepositorySession(t *testing.T) {
 	git(t, clone, "pull", "--quiet", "--no-rebase", origin, "HEAD")
 	assertStates(t, atClone(true, "status", "--json"), map[string]string{"spawn": "diverged"})
 	atClone(false, "save", "--last")
-	assertOutput(t, atClone(true, "open", "spawn", "--replace"), "replaced Claude Code session")
+	// Run inside Claude Code, open explains how to switch to the session in the
+	// chat, and refuses to start a second agent with --resume.
+	insideClaude := append(target.agentTeleportEnvironment(), "CLAUDE_CODE_SESSION_ID="+sessionID)
+	runIn(t, binary, insideClaude, clone, nil, false, "open", "spawn", "--replace", "--resume")
+	assertOutput(t, runIn(t, binary, insideClaude, clone, nil, true, "open", "spawn", "--replace"), "type /resume "+sessionID+" in Claude Code")
 	assertStates(t, atClone(true, "status", "--json"), map[string]string{"spawn": "in-sync"})
 }
 

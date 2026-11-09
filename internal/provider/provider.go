@@ -36,6 +36,9 @@ type Adapter struct {
 	// ValidateArchive checks that an archive of this provider is internally
 	// consistent. It needs no local installation.
 	ValidateArchive func(source archive.Archive) error
+	// Switch tells a person how to switch to sessionID from inside a running
+	// session of this provider, without a new terminal.
+	Switch func(sessionID string) string
 	// Current returns the ID of the session that this process runs inside,
 	// such as a shell command the agent started, and whether there is one.
 	Current func() (string, bool)

@@ -48,7 +48,7 @@ func (a *App) save(ctx context.Context, args []string) error {
 	if err != nil {
 		return usageOrHelp(err, "")
 	}
-	selector, err := sessionSelector(positional, *last, saveUsage)
+	selector, err := a.sessionSelector(positional, *last)
 	if err != nil {
 		return err
 	}
@@ -232,17 +232,23 @@ func (a *App) open(ctx context.Context, args []string) error {
 	dryRun := set.Bool("dry-run", false, "")
 	resume := set.Bool("resume", false, "")
 	positional, err := a.parse(set, args, openUsage)
-	if err != nil || len(positional) != 1 {
-		return usageOrHelp(err, "open requires exactly one saved session name")
+	if err != nil || len(positional) > 1 || (len(positional) == 0 && !a.Interactive) {
+		return usageOrHelp(err, "open requires one saved session name")
 	}
-	if *dryRun && *resume {
-		return &UsageError{Message: "--dry-run and --resume cannot be used together"}
+	if err := resumeAllowed(*dryRun, *resume); err != nil {
+		return err
 	}
 	repo, err := currentRepository(ctx)
 	if err != nil {
 		return err
 	}
-	saved, err := repo.Load(positional[0])
+	name := ""
+	if len(positional) == 1 {
+		name = positional[0]
+	} else if name, err = a.chooseSaved(repo); err != nil {
+		return err
+	}
+	saved, err := repo.Load(name)
 	if err != nil {
 		return err
 	}
@@ -260,6 +266,34 @@ func (a *App) open(ctx context.Context, args []string) error {
 	}
 	defer store.Close()
 	return a.importInto(adapter, store, provider.ImportRequest{Archive: local, Workspace: local.Manifest.Workspace, Replace: *replace, DryRun: *dryRun}, *resume)
+}
+
+// chooseSaved asks the person at the terminal to choose a saved session.
+func (a *App) chooseSaved(repo repository.Repository) (string, error) {
+	saved, err := repo.Sessions()
+	if err != nil {
+		return "", err
+	}
+	if len(saved) == 0 {
+		return "", errors.New("no sessions are saved in this repository")
+	}
+	var rows strings.Builder
+	writer := tabwriter.NewWriter(&rows, 0, 4, 2, ' ', 0)
+	for index, session := range saved {
+		description := "unreadable"
+		if session.Err == nil {
+			if adapter, err := archiveAdapter(session.Archive); err == nil {
+				description = adapter.Command + "\t" + shortID(session.Archive.Manifest.SessionID)
+			}
+		}
+		_, _ = fmt.Fprintf(writer, "%3d\t%s\t%s\n", index+1, session.Name, description)
+	}
+	_ = writer.Flush()
+	choice, err := a.choose("Saved session", strings.Split(strings.TrimSuffix(rows.String(), "\n"), "\n"))
+	if err != nil {
+		return "", err
+	}
+	return saved[choice].Name, nil
 }
 
 // statusEntry is the JSON representation of one saved session in status

@@ -42,6 +42,9 @@ var Adapter = provider.Adapter{
 	ValidateArchive: ValidateArchive,
 	Relocate:        Relocate,
 	Current:         Current,
+	Switch: func(string) string {
+		return "type /resume in Codex and choose the session"
+	},
 }
 
 // sessionEnvironment names the variable through which Codex tells the commands

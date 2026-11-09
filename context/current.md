@@ -10,7 +10,7 @@
 
 ## Repository state
 
-- Commands: `list`, `export`, `import`, `inspect`, `save`, `open`, `status`, `doctor`, with per-command help and `--version`.
+- Commands: `list`, `export`, `import`, `inspect`, `save`, `open`, `status`, `doctor`, `completion`, with per-command help and `--version`. Selectors match ID prefixes, exact titles, and parts of titles; terminals get numbered prompts.
 - The archive manifest lists every payload file with its size and SHA-256 digest.
 - Import applies the fast-forward update rule. `--replace` uses the recoverable rollback transaction for single-thread Codex sessions and atomic renames for Claude Code sessions; other diverged Codex sessions must be deleted in Codex first.
 - Moving a session rewrites every boundary-delimited mention of the workspace in every record and saved tool output and preserves all other bytes; moving there and back is the identity on the native fixtures.
@@ -25,8 +25,8 @@
 
 ## Next work
 
-1. Make selection forgiving: a numbered prompt when no session is named in a terminal, and title substrings as selectors.
-2. Add shell completion for session IDs and saved session names.
+1. Add fish completion once fish can be tested.
+2. Publishing: the plugin marketplace and `go install` work for people without access only once the repository is public.
 
 ## Open questions
 
@@ -69,4 +69,5 @@
 - App Server `thread/list` lists only the configured model provider's threads unless `modelProviders` is an empty list.
 - Native Codex rollouts mention `CODEX_HOME`, for example in skills instructions, so relocation moves the Codex home as well as the workspace.
 - Codex 0.167 installs plugins from Claude Code marketplaces (`.claude-plugin/marketplace.json`) and reads `.claude-plugin/plugin.json`; both agents name the plugin skill `agent-teleport:teleport`.
+- Claude Code's `/resume <id or name>` switches the running chat in place; its picker lists the current project and leaves out `-p` and SDK sessions. Codex's TUI has a resume picker. Neither lets a skill switch sessions.
 - Claude Code writes `queue-operation` records with the prompt text before each prompt record.

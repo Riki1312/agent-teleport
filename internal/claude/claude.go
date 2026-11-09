@@ -48,6 +48,9 @@ var Adapter = provider.Adapter{
 	ValidateArchive: ValidateArchive,
 	Relocate:        Relocate,
 	Current:         Current,
+	Switch: func(sessionID string) string {
+		return "type /resume " + sessionID + " in Claude Code"
+	},
 }
 
 // sessionEnvironment names the variable through which Claude Code tells the

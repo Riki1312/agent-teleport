@@ -48,6 +48,7 @@ func TestClaudeTwoHomeTransfer(t *testing.T) {
 		"list", "--all", "--json"), sessionID, targetCWD)
 	assertOutput(t, runClaude(t, binary, target, nil, true,
 		"import", archivePath, "--cwd", targetCWD), "already up to date")
+	assertOutput(t, runClaude(t, binary, target, nil, true, "__complete", "export", "--all", ""), sessionID+"\tspawn a child")
 
 	// Claude Code continues the imported session from the target workspace,
 	// even by folder name with --continue, and sees only target paths.

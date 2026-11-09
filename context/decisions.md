@@ -46,6 +46,18 @@ Each entry uses this shape:
 - `rationale`: Codex 0.167 reads Claude Code marketplaces and plugin manifests, and both agents use the same skill format, so a second manifest would only duplicate it. People decide to share a session while they are in it.
 - `impact`: The plugin's install is tested in both agents. The plugin has no version, so updates follow the repository.
 
+### Select sessions forgivingly, without a full-screen picker
+
+- `decision`: A selector matches a unique ID prefix, then an exact title, then a unique part of a title in any case; an ambiguous selector lists its matches. Without a selector, `export` and `save` use the current session inside an agent and ask with a numbered list at a terminal, and `open` asks for a saved session the same way. Shell completion for bash and zsh asks a hidden `__complete` command, which reads options from the help texts, so a test that every documented option is accepted keeps them in step.
+- `rationale`: The standard library covers choosing among a few sessions; a TUI dependency would add more maintenance than value. fish is left out until it can be tested.
+- `impact`: Prompts never appear when stdin or stderr is not a terminal, so scripts keep failing fast.
+
+### Switch sessions in the chat, not in a nested agent
+
+- `decision`: When an agent runs `open` or `import`, print how to switch to the session in the chat, `/resume <id>` in Claude Code and `/resume` in Codex, and refuse `--resume`.
+- `rationale`: Claude Code's `/resume <session>` switches the running chat in place, and Codex has a resume picker; a resume command started by an agent's tool call would run an interactive agent inside the first. Only the person can switch, because neither agent lets a skill do it.
+- `impact`: Opening a saved session from inside an agent ends with one typed command.
+
 ### Refuse likely secrets before saving
 
 - `decision`: `save` scans what it adds to the repository, the new lines of grown files and every new file, with built-in patterns for unambiguous credential formats: private key blocks and AWS, GitHub, Anthropic, OpenAI, Slack, Google, and Stripe keys. JSON records are scanned by their decoded strings. Findings name the file, line, and rule but never the secret, and refuse the save unless `--allow-secrets` is passed.
