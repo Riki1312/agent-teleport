@@ -1,0 +1,66 @@
+internal/archive/archive.go
+  s_b3feabb7857cd3::t_74de2acd44c5d3 55-66,85-99,127,160,162,164,230-231,240-241
+test/e2e/repository_test.go
+  s_b3feabb7857cd3::t_dd3beb271f0dc6 1-190
+AGENTS.md
+  s_b3feabb7857cd3::t_14eff82e048723 3
+internal/archive/directory.go
+  s_b3feabb7857cd3::t_74de2acd44c5d3 69-71
+  s_b3feabb7857cd3::t_e322be42f7fd3e 1-68,72-202
+ARCHITECTURE.md
+  s_b3feabb7857cd3::t_1a1fc6aa88a73a 231,234-235
+  s_b3feabb7857cd3::t_14eff82e048723 3,35-37,45,116-117,207,209,211-217
+context/current.md
+  s_b3feabb7857cd3::t_14eff82e048723 9,13,21,27
+internal/cli/repository.go
+  ai_agent 292-293,296
+  s_b3feabb7857cd3::t_793322bc6ac2cc 1-10,12-291,294-295,297-373
+  s_b3feabb7857cd3::t_54e907b462115e 11
+internal/cli/cli.go
+  s_b3feabb7857cd3::t_54e907b462115e 72-77,172,176,180-181,309-315,319,322,329,551-580
+internal/codex/import.go
+  s_b3feabb7857cd3::t_d86815a3aab74b 187-190
+  s_b3feabb7857cd3::t_6074afc81962ed 182-186
+test/e2e/transfer_test.go
+  s_b3feabb7857cd3::t_21dbb8a4ec9b93 479-480,488-494,497-498
+README.md
+  s_b3feabb7857cd3::t_14eff82e048723 9,32-43
+internal/secrets/secrets_test.go
+  s_b3feabb7857cd3::t_3d291b56d4894a 1-71
+internal/repository/repository.go
+  s_b3feabb7857cd3::t_31eb35b1413f30 1-125,128-131,140-143,147-188
+  s_b3feabb7857cd3::t_0e8533b02846f3 126-127,132-139,144-146
+internal/secrets/secrets.go
+  s_b3feabb7857cd3::t_8dfdd908048fb4 1-49,53-54,56-88
+  s_b3feabb7857cd3::t_3d291b56d4894a 50-52,55
+internal/repository/repository_test.go
+  s_b3feabb7857cd3::t_3ae10e9ddbc3a6 1-87,89,95-118
+  s_b3feabb7857cd3::t_0e8533b02846f3 88,90-94
+internal/cli/repository_test.go
+  s_b3feabb7857cd3::t_0e8533b02846f3 1-89
+context/decisions.md
+  s_b3feabb7857cd3::t_14eff82e048723 29,33,39-47
+test/e2e/claude_test.go
+  s_b3feabb7857cd3::t_21dbb8a4ec9b93 243-244,247-254
+internal/cli/help.go
+  s_b3feabb7857cd3::t_54e907b462115e 13-15,94-112,114-139
+  ai_agent 113
+internal/archive/directory_test.go
+  s_b3feabb7857cd3::t_f38cf10fc24dc9 1-123
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.2",
+  "base_commit_sha": "91d45e1eadb0121820c7d08251f4fda0f7b726d7",
+  "prompts": {},
+  "sessions": {
+    "s_b3feabb7857cd3": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "fd1b6ebe-1b52-4a20-8b44-740169df5be6",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Riccardo <riki.brero@gmail.com>"
+    }
+  }
+}
