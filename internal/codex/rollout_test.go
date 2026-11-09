@@ -8,7 +8,6 @@ import (
 	"slices"
 	"strings"
 	"testing"
-	"time"
 )
 
 const testSessionID = "01999999-1111-7777-8888-222222222222"
@@ -44,7 +43,7 @@ func TestValidateAndRemapWorkspace(t *testing.T) {
 }
 
 func TestRemapWorkspaceRoundTripsNativeFixture(t *testing.T) {
-	original, err := os.ReadFile(filepath.Join("..", "..", "testdata", "codex", "rollout.jsonl"))
+	original, err := os.ReadFile(filepath.Join("..", "..", "testdata", "codex", parentFixture))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -211,7 +210,7 @@ func TestValidateRolloutHistoryBase(t *testing.T) {
 			source := append(append(header, '\n'), rest...)
 			_, err = testLayout.validateRollout(source)
 			if test.wantError {
-				if err == nil || !strings.Contains(err.Error(), "history_base") {
+				if err == nil || !strings.Contains(err.Error(), "extends another rollout") {
 					t.Fatalf("ValidateRollout must reject an incomplete single-file archive, got %v", err)
 				}
 			} else if err != nil {
@@ -255,24 +254,13 @@ func TestValidateRolloutThreadAndSessionIDs(t *testing.T) {
 			source := append(append(header, '\n'), rest...)
 			meta, err := testLayout.validateRollout(source)
 			if test.wantError {
-				if err == nil || !strings.Contains(err.Error(), "different thread and session IDs") {
+				if err == nil || !strings.Contains(err.Error(), "another session") {
 					t.Fatalf("ambiguous thread identity must fail closed, got %v", err)
 				}
 			} else if err != nil || meta.ID != testSessionID {
 				t.Fatalf("ValidateRollout() = %#v, %v; want session %s", meta, err, testSessionID)
 			}
 		})
-	}
-}
-
-func TestRolloutPathUsesLocalTime(t *testing.T) {
-	timestamp := time.Date(2026, 9, 13, 23, 58, 44, 0, time.UTC)
-	meta := sessionMeta{ID: testSessionID, Timestamp: timestamp}
-	local := timestamp.Local()
-	want := filepath.Join("/codex", "sessions", local.Format("2006"), local.Format("01"), local.Format("02"),
-		"rollout-"+local.Format("2006-01-02T15-04-05")+"-"+testSessionID+".jsonl")
-	if got := rolloutPath("/codex", meta); got != want {
-		t.Fatalf("RolloutPath() = %q, want %q", got, want)
 	}
 }
 

@@ -66,10 +66,11 @@ type Client struct {
 	closed  bool
 }
 
-// Start launches the App Server of the Codex binary for codexHome and completes
-// its initialization handshake. The process stops when ctx is canceled or Close is called.
-func Start(ctx context.Context, binary, codexHome string) (*Client, error) {
-	command := exec.CommandContext(ctx, binary, "app-server", "--stdio")
+// Start launches the App Server of the Codex binary for codexHome, passing
+// arguments such as feature flags, and completes its initialization handshake.
+// The process stops when ctx is canceled or Close is called.
+func Start(ctx context.Context, binary, codexHome string, arguments ...string) (*Client, error) {
+	command := exec.CommandContext(ctx, binary, append([]string{"app-server", "--stdio"}, arguments...)...)
 	command.Env = withCodexHome(os.Environ(), codexHome)
 
 	stdin, err := command.StdinPipe()
@@ -165,12 +166,14 @@ func (c *Client) Read(id string) (Thread, error) {
 	}, id)
 }
 
-// Resume loads a thread for continuation in cwd without starting a turn.
+// Resume loads a thread for continuation without starting a turn. A non-empty
+// cwd moves the thread to that workspace.
 func (c *Client) Resume(id, cwd string) (Thread, error) {
-	return c.threadResponse("thread/resume", map[string]any{
-		"threadId": id,
-		"cwd":      cwd,
-	}, id)
+	params := map[string]any{"threadId": id}
+	if cwd != "" {
+		params["cwd"] = cwd
+	}
+	return c.threadResponse("thread/resume", params, id)
 }
 
 func (c *Client) threadResponse(method string, params map[string]any, id string) (Thread, error) {
@@ -191,6 +194,12 @@ func (c *Client) threadResponse(method string, params map[string]any, id string)
 		return Thread{}, fmt.Errorf("%s returned ID %q, want %q", method, value.Thread.ID, id)
 	}
 	return value.Thread, nil
+}
+
+// Fork creates a new thread that continues the history of id, without starting
+// a turn.
+func (c *Client) Fork(id string) (Thread, error) {
+	return c.threadResponse("thread/fork", map[string]any{"threadId": id}, "")
 }
 
 // Delete removes a thread, including its rollout file and indexed state.

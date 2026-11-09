@@ -16,14 +16,14 @@
 - Workspace remapping rewrites every boundary-delimited mention of the workspace in metadata events and preserves all other bytes; remapping there and back is the identity on the native fixture.
 - Collision checks cover active and archived Codex sessions.
 - CI runs golangci-lint (doc comments required), Prettier, and the Go tests on Linux and macOS, with the required two-home E2E test against Codex 0.165.0, 0.166.0, and 0.167.0. `make check` runs the same checks locally.
-- The fixture in `testdata/codex` was written by Codex 0.167.0 in a throwaway home and sanitized with `tools/sanitize-fixture`.
+- Forks are exported with their ancestor prefixes and verified by loading their history in a safe App Server; reverted threads and multi-agent children are rejected.
+- The fixtures in `testdata/codex` are a sanitized Codex 0.167.0 rollout from a throwaway home and a native fork of it.
 
 ## Next work
 
-1. Support multi-file Codex histories: forks and snapshots whose `history_base` refers to a byte prefix of another rollout, and multi-agent children. Probe whether App Server repairs them without database writes. See the findings below.
-2. Add the Claude Code adapter, then extract the provider interface from both adapters.
-3. Implement repository sessions: `save`, `open`, `status`, repository-relative paths, Git commit recording, secret scanning, and native forks for `save --as`.
-4. Add the interactive export picker.
+1. Add the Claude Code adapter, then extract the provider interface from both adapters.
+2. Implement repository sessions: `save`, `open`, `status`, repository-relative paths, Git commit recording, secret scanning, and native forks for `save --as`.
+3. Add the interactive export picker.
 
 ## Open questions
 
@@ -44,4 +44,7 @@
 - App Server `thread/list` returns only interactive sources unless `sourceKinds` is given, and Codex names rollout files after local time.
 - Rollouts often end with `thread_settings_applied` after `task_complete`. Codex 0.167.0 also keeps `thread_history_1.sqlite`, which is likely the cached rollout locator.
 - On 0.167.0, `thread/read` returns no turns until the thread is loaded, for example by `thread/resume`, which leaves the rollout unchanged. Production import cannot count turns without resuming, which could continue automatic goals in a real home; the E2E test checks turns after resume in its isolated home.
-- A fork placed without its ancestor fails `thread/read` with "missing source rollout". With the ancestor present, the unchanged files load, but the fork is not listed until it has turns of its own. Multi-file transfer must therefore carry ancestors, decide whether to remap their workspace (which changes the byte offsets descendants refer to), and accept an ancestor that already exists locally when its prefix matches.
+- A fork placed without its ancestor fails `thread/read` with "missing source rollout". With the ancestor present, the fork is not listed until it has turns of its own, and it replays its turns only after its ancestors have been resumed once, in any process. Rewriting ancestors and adjusting byte offsets behaves exactly like unchanged files.
+- `thread/turns/list` returns no turns for unloaded threads. Goals, hooks, plugins, shell snapshots, and local automations can be disabled with `--disable` feature flags, present in 0.165.0 through 0.167.0; an unknown flag stops App Server from starting.
+- `thread/revert` writes a snapshot `rollout-<time>-<thread>_<object>.jsonl` that references a prefix of the thread's own original rollout. In a fresh home, Codex resolves the thread to the original file and loses the revert, because it locates snapshots through its database.
+- `thread/delete` refuses a thread that forks reference.

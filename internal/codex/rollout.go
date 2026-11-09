@@ -17,54 +17,60 @@ type sessionMeta struct {
 	ID        string
 	CWD       string
 	Timestamp time.Time
+	// Base is the ancestor prefix a forked rollout extends, or nil for a
+	// rollout that holds its whole history.
+	Base *historyBase
 }
 
-// stableRollout reads a rollout and validates it, failing when the file changed
-// during the read.
-func (l layout) stableRollout(path string) ([]byte, sessionMeta, error) {
+// turnState tracks turn boundaries across the records of a history.
+type turnState struct {
+	open      bool
+	started   int
+	completed int
+}
+
+// readStable reads a rollout and fails when the file changed during the read.
+func readStable(path string) ([]byte, error) {
 	before, err := os.Stat(path)
 	if err != nil {
-		return nil, sessionMeta{}, fmt.Errorf("stat rollout: %w", err)
+		return nil, fmt.Errorf("stat rollout: %w", err)
 	}
 	if !before.Mode().IsRegular() {
-		return nil, sessionMeta{}, errors.New("rollout is not a regular file")
+		return nil, errors.New("rollout is not a regular file")
 	}
 	data, err := os.ReadFile(path)
 	if err != nil {
-		return nil, sessionMeta{}, fmt.Errorf("read rollout: %w", err)
+		return nil, fmt.Errorf("read rollout: %w", err)
 	}
 	after, err := os.Stat(path)
 	if err != nil {
-		return nil, sessionMeta{}, fmt.Errorf("stat rollout after read: %w", err)
+		return nil, fmt.Errorf("stat rollout after read: %w", err)
 	}
 	if before.Size() != after.Size() || !before.ModTime().Equal(after.ModTime()) {
-		return nil, sessionMeta{}, errors.New("rollout changed while it was being read")
+		return nil, errors.New("rollout changed while it was being read")
 	}
-	meta, err := l.validateRollout(data)
-	if err != nil {
-		return nil, sessionMeta{}, err
-	}
-	return data, meta, nil
+	return data, nil
 }
 
-// validateRollout checks that data is one complete, self-contained Codex
-// session ending at a completed turn, and returns its recorded identity.
-func (l layout) validateRollout(data []byte) (sessionMeta, error) {
+// parseRollout checks that data is a sequence of complete JSON records starting
+// with session metadata, and returns the recorded identity. It does not check
+// turn boundaries, which depend on the whole history.
+func parseRollout(data []byte) (sessionMeta, error) {
 	if len(data) == 0 || data[len(data)-1] != '\n' {
 		return sessionMeta{}, errors.New("rollout does not end with a complete JSONL record")
 	}
 	lines := bytes.Split(data[:len(data)-1], []byte{'\n'})
-	if len(lines) == 0 || len(lines[0]) == 0 {
+	if len(lines[0]) == 0 {
 		return sessionMeta{}, errors.New("rollout has no session metadata")
 	}
 	var first struct {
 		Type    string `json:"type"`
 		Payload struct {
-			ID          string          `json:"id"`
-			SessionID   string          `json:"session_id"`
-			CWD         string          `json:"cwd"`
-			Timestamp   string          `json:"timestamp"`
-			HistoryBase json.RawMessage `json:"history_base"`
+			ID          string       `json:"id"`
+			SessionID   string       `json:"session_id"`
+			CWD         string       `json:"cwd"`
+			Timestamp   string       `json:"timestamp"`
+			HistoryBase *historyBase `json:"history_base"`
 		} `json:"payload"`
 	}
 	if err := json.Unmarshal(lines[0], &first); err != nil {
@@ -73,11 +79,8 @@ func (l layout) validateRollout(data []byte) (sessionMeta, error) {
 	if first.Type != "session_meta" {
 		return sessionMeta{}, fmt.Errorf("first rollout event has type %q, want session_meta", first.Type)
 	}
-	if len(first.Payload.HistoryBase) != 0 && !bytes.Equal(bytes.TrimSpace(first.Payload.HistoryBase), []byte("null")) {
-		return sessionMeta{}, errors.New("rollout references an external history_base; single-file archives cannot preserve its dependencies")
-	}
 	if first.Payload.ID != "" && first.Payload.SessionID != "" && first.Payload.ID != first.Payload.SessionID {
-		return sessionMeta{}, errors.New("rollout has different thread and session IDs; this layout is not supported")
+		return sessionMeta{}, errors.New("rollout belongs to another session, such as a multi-agent child thread; this layout is not supported")
 	}
 	id := first.Payload.SessionID
 	if id == "" {
@@ -89,11 +92,13 @@ func (l layout) validateRollout(data []byte) (sessionMeta, error) {
 	if !validSessionID(id) {
 		return sessionMeta{}, fmt.Errorf("session ID %q is not a UUIDv7", id)
 	}
+	if base := first.Payload.HistoryBase; base != nil && (!validSessionID(base.ThreadID) || base.EndByteOffset <= 0 || base.EndOrdinalExclusive <= 0) {
+		return sessionMeta{}, errors.New("session metadata has an invalid history_base reference")
+	}
 	timestamp, err := time.Parse(time.RFC3339Nano, first.Payload.Timestamp)
 	if err != nil {
 		return sessionMeta{}, fmt.Errorf("parse session timestamp: %w", err)
 	}
-	turnOpen, completedTurns := false, 0
 	for index, line := range lines[1:] {
 		if len(line) == 0 {
 			return sessionMeta{}, fmt.Errorf("rollout line %d is empty", index+2)
@@ -101,22 +106,49 @@ func (l layout) validateRollout(data []byte) (sessionMeta, error) {
 		if !json.Valid(line) {
 			return sessionMeta{}, fmt.Errorf("rollout line %d is not valid JSON", index+2)
 		}
+	}
+	return sessionMeta{ID: id, CWD: first.Payload.CWD, Timestamp: timestamp, Base: first.Payload.HistoryBase}, nil
+}
+
+// advanceTurns applies the turn boundaries in the records after a rollout's
+// session metadata to state.
+func (l layout) advanceTurns(state *turnState, data []byte) error {
+	lines := bytes.Split(bytes.TrimSuffix(data, []byte{'\n'}), []byte{'\n'})
+	for index, line := range lines[1:] {
 		kind, err := classifyEvent(line)
 		if err != nil {
-			return sessionMeta{}, fmt.Errorf("decode rollout line %d: %w", index+2, err)
+			return fmt.Errorf("decode rollout line %d: %w", index+2, err)
 		}
 		switch {
 		case kind == l.turnStarted:
-			turnOpen = true
+			state.open = true
+			state.started++
 		case l.isTurnEnd(kind):
-			turnOpen = false
-			completedTurns++
+			state.open = false
+			state.completed++
 		}
 	}
-	if turnOpen || completedTurns == 0 {
+	return nil
+}
+
+// validateRollout checks that data is one self-contained Codex session ending
+// after a completed turn, and returns its recorded identity.
+func (l layout) validateRollout(data []byte) (sessionMeta, error) {
+	meta, err := parseRollout(data)
+	if err != nil {
+		return sessionMeta{}, err
+	}
+	if meta.Base != nil {
+		return sessionMeta{}, errors.New("rollout extends another rollout")
+	}
+	var state turnState
+	if err := l.advanceTurns(&state, data); err != nil {
+		return sessionMeta{}, err
+	}
+	if state.open || state.completed == 0 {
 		return sessionMeta{}, errors.New("rollout does not end after a completed turn")
 	}
-	return sessionMeta{ID: id, CWD: first.Payload.CWD, Timestamp: timestamp}, nil
+	return meta, nil
 }
 
 // validSessionID accepts only UUIDv7 strings, which also keeps a session ID safe
@@ -143,22 +175,36 @@ func validSessionID(id string) bool {
 	return true
 }
 
-// remapWorkspace moves every workspace path in recognized metadata events from
-// the recorded workspace to targetCWD, keeping the relative suffix of paths
-// inside the workspace. Only rewritten JSON strings change; all other bytes,
-// including recorded tool results, stay as recorded. The rewrite must be
-// reversible, so a rollout that already mentions targetCWD in its metadata
-// fails.
+// remapWorkspace moves a self-contained rollout from its recorded workspace to
+// targetCWD; see remapLines.
 func (l layout) remapWorkspace(data []byte, targetCWD string) ([]byte, sessionMeta, error) {
 	meta, err := l.validateRollout(data)
 	if err != nil {
 		return nil, sessionMeta{}, err
 	}
-	if !filepath.IsAbs(targetCWD) {
-		return nil, sessionMeta{}, errors.New("target workspace must be absolute")
+	remapped, changed, err := l.remapLines(data, meta.CWD, targetCWD)
+	if err != nil {
+		return nil, sessionMeta{}, err
 	}
-	if filepath.Dir(meta.CWD) == meta.CWD {
-		return nil, sessionMeta{}, errors.New("a filesystem root workspace cannot be remapped")
+	if changed == 0 {
+		return nil, sessionMeta{}, errors.New("rollout contains no recognized workspace metadata")
+	}
+	meta.CWD = targetCWD
+	return remapped, meta, nil
+}
+
+// remapLines moves every mention of sourceCWD in recognized workspace metadata
+// events to targetCWD, keeping the relative suffix of paths inside the
+// workspace, and returns the number of strings changed. Only rewritten JSON
+// strings change; all other bytes, including recorded tool results, stay as
+// recorded. The rewrite must be reversible, so a rollout whose metadata
+// already mentions targetCWD fails.
+func (l layout) remapLines(data []byte, sourceCWD, targetCWD string) ([]byte, int, error) {
+	if !filepath.IsAbs(targetCWD) {
+		return nil, 0, errors.New("target workspace must be absolute")
+	}
+	if filepath.Dir(sourceCWD) == sourceCWD {
+		return nil, 0, errors.New("a filesystem root workspace cannot be remapped")
 	}
 	lines := bytes.Split(data, []byte{'\n'})
 	remapped := 0
@@ -168,35 +214,23 @@ func (l layout) remapWorkspace(data []byte, targetCWD string) ([]byte, sessionMe
 		}
 		kind, err := classifyEvent(line)
 		if err != nil {
-			return nil, sessionMeta{}, fmt.Errorf("decode rollout line %d: %w", index+1, err)
+			return nil, 0, fmt.Errorf("decode rollout line %d: %w", index+1, err)
 		}
 		if !l.isWorkspaceEvent(kind) {
 			continue
 		}
-		rewritten, changed, err := remapStrings(line, meta.CWD, targetCWD)
+		rewritten, changed, err := remapStrings(line, sourceCWD, targetCWD)
 		if err != nil {
-			return nil, sessionMeta{}, fmt.Errorf("remap rollout line %d: %w", index+1, err)
+			return nil, 0, fmt.Errorf("remap rollout line %d: %w", index+1, err)
 		}
-		restored, _, err := remapStrings(rewritten, targetCWD, meta.CWD)
+		restored, _, err := remapStrings(rewritten, targetCWD, sourceCWD)
 		if err != nil || !bytes.Equal(restored, line) {
-			return nil, sessionMeta{}, fmt.Errorf("rollout line %d already mentions %s; the workspace remap would not be reversible", index+1, targetCWD)
+			return nil, 0, fmt.Errorf("rollout line %d already mentions %s; the workspace remap would not be reversible", index+1, targetCWD)
 		}
 		lines[index] = rewritten
 		remapped += changed
 	}
-	if remapped == 0 {
-		return nil, sessionMeta{}, errors.New("rollout contains no recognized workspace metadata")
-	}
-	meta.CWD = targetCWD
-	return bytes.Join(lines, []byte{'\n'}), meta, nil
-}
-
-// rolloutPath returns where Codex would store a new active rollout for meta.
-// Codex names rollouts after their local creation time.
-func rolloutPath(home string, meta sessionMeta) string {
-	timestamp := meta.Timestamp.Local()
-	name := fmt.Sprintf("rollout-%s-%s.jsonl", timestamp.Format("2006-01-02T15-04-05"), meta.ID)
-	return filepath.Join(home, "sessions", timestamp.Format("2006"), timestamp.Format("01"), timestamp.Format("02"), name)
+	return bytes.Join(lines, []byte{'\n'}), remapped, nil
 }
 
 // storedSession lists the files Codex and agent-teleport keep for one session.
@@ -207,6 +241,8 @@ type storedSession struct {
 	// pending are the rollout paths with a rollback link or stage file left by
 	// an interrupted write.
 	pending []string
+	// snapshots are rollouts Codex writes when a thread is reverted.
+	snapshots []string
 }
 
 // findSession searches the active and archived Codex stores for the files of
@@ -215,6 +251,7 @@ type storedSession struct {
 func findSession(home, sessionID string) (storedSession, error) {
 	var found storedSession
 	suffix := "-" + sessionID + ".jsonl"
+	snapshotPrefix := "-" + sessionID + "_"
 	for _, store := range []struct {
 		root  string
 		paths *[]string
@@ -240,6 +277,8 @@ func findSession(home, sessionID string) (storedSession, error) {
 				found.pending = appendUnique(found.pending, strings.TrimSuffix(path, rollbackSuffix))
 			case strings.HasSuffix(name, suffix+stageSuffix):
 				found.pending = appendUnique(found.pending, strings.TrimSuffix(path, stageSuffix))
+			case strings.Contains(name, snapshotPrefix) && strings.HasSuffix(name, ".jsonl"):
+				found.snapshots = append(found.snapshots, path)
 			}
 			return nil
 		})

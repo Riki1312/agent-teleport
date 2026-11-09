@@ -9,7 +9,6 @@ package codex
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -26,9 +25,6 @@ const Provider = "openai-codex"
 
 // BinaryEnvironment names the variable that overrides the Codex binary path.
 const BinaryEnvironment = "AGENT_TELEPORT_CODEX"
-
-// rolloutPayload is the archive path of a session's rollout file.
-const rolloutPayload = "rollout.jsonl"
 
 // userSources are the thread sources a person starts and can resume.
 // Sub-agent threads belong to their parent session and are not listed.
@@ -115,24 +111,43 @@ func (s *Store) Sessions(workspace string) ([]Session, error) {
 	}
 	sessions := make([]Session, 0, len(threads))
 	for _, thread := range threads {
-		title := thread.Name
-		if title == "" {
-			title = thread.Preview
-		}
-		sessions = append(sessions, Session{
-			ID:          thread.ID,
-			Title:       strings.Join(strings.Fields(title), " "),
-			Workspace:   thread.CWD,
-			UpdatedAt:   time.Unix(thread.UpdatedAt, 0).UTC(),
-			rolloutPath: thread.Path,
-			status:      thread.Status.Type,
-		})
+		sessions = append(sessions, newSession(thread))
 	}
 	return sessions, nil
 }
 
+func newSession(thread appserver.Thread) Session {
+	title := thread.Name
+	if title == "" {
+		title = thread.Preview
+	}
+	return Session{
+		ID:          thread.ID,
+		Title:       strings.Join(strings.Fields(title), " "),
+		Workspace:   thread.CWD,
+		UpdatedAt:   time.Unix(thread.UpdatedAt, 0).UTC(),
+		rolloutPath: thread.Path,
+		status:      thread.Status.Type,
+	}
+}
+
+// Session returns a local session by its full ID. Codex lists a fork only
+// once it has turns of its own, so a session can exist without being listed.
+func (s *Store) Session(id string) (Session, error) {
+	client, err := s.appServer()
+	if err != nil {
+		return Session{}, err
+	}
+	thread, err := client.Read(id)
+	if err != nil {
+		return Session{}, fmt.Errorf("read Codex session %s: %w", id, err)
+	}
+	return newSession(thread), nil
+}
+
 // Export snapshots a completed session into an archive stamped with createdAt.
-// It fails while the session has an active or incomplete turn.
+// A forked session carries the prefix of every ancestor rollout it extends. It
+// fails while the session has an active or incomplete turn.
 func (s *Store) Export(session Session, createdAt time.Time) (archive.Archive, error) {
 	if !isQuiescent(session.status) {
 		return archive.Archive{}, fmt.Errorf("session %s is not quiescent (status %q)", session.ID, session.status)
@@ -140,10 +155,11 @@ func (s *Store) Export(session Session, createdAt time.Time) (archive.Archive, e
 	if session.rolloutPath == "" {
 		return archive.Archive{}, fmt.Errorf("Codex did not report a rollout path for session %s", session.ID)
 	}
-	rollout, meta, err := s.layout.stableRollout(session.rolloutPath)
+	exported, err := s.layout.readHistory(s.home, session.rolloutPath)
 	if err != nil {
 		return archive.Archive{}, fmt.Errorf("snapshot session %s: %w", session.ID, err)
 	}
+	meta := exported.session().meta
 	if meta.ID != session.ID {
 		return archive.Archive{}, fmt.Errorf("rollout session ID %s does not match selected session %s", meta.ID, session.ID)
 	}
@@ -153,7 +169,7 @@ func (s *Store) Export(session Session, createdAt time.Time) (archive.Archive, e
 		SessionID:       meta.ID,
 		Workspace:       meta.CWD,
 		CreatedAt:       createdAt,
-	}, []archive.Payload{{Path: rolloutPayload, Data: rollout}})
+	}, exported.payloads())
 }
 
 // ResumeCommand returns the Codex command that continues sessionID in
@@ -207,33 +223,27 @@ func (s *Store) appServer() (*appserver.Client, error) {
 	return client, nil
 }
 
-// validateArchive checks a Codex archive and returns its layout and rollout.
-func validateArchive(source archive.Archive) (layout, []byte, error) {
+// validateArchive checks a Codex archive and returns its layout and history.
+func validateArchive(source archive.Archive) (layout, history, error) {
 	if source.Manifest.Provider != Provider {
-		return layout{}, nil, fmt.Errorf("archive provider %q is not %s", source.Manifest.Provider, Provider)
-	}
-	if len(source.Manifest.Files) != 1 {
-		return layout{}, nil, errors.New("Codex archive must contain exactly one rollout")
-	}
-	rollout, ok := source.Data(rolloutPayload)
-	if !ok {
-		return layout{}, nil, fmt.Errorf("Codex archive is missing %s", rolloutPayload)
+		return layout{}, history{}, fmt.Errorf("archive provider %q is not %s", source.Manifest.Provider, Provider)
 	}
 	sourceLayout, _, err := layoutFor(source.Manifest.ProviderVersion)
 	if err != nil {
-		return layout{}, nil, err
+		return layout{}, history{}, err
 	}
-	meta, err := sourceLayout.validateRollout(rollout)
+	stored, err := sourceLayout.historyFromArchive(source)
 	if err != nil {
-		return layout{}, nil, fmt.Errorf("validate rollout: %w", err)
+		return layout{}, history{}, fmt.Errorf("validate session history: %w", err)
 	}
+	meta := stored.session().meta
 	if source.Manifest.SessionID != meta.ID {
-		return layout{}, nil, fmt.Errorf("manifest session ID %s does not match rollout %s", source.Manifest.SessionID, meta.ID)
+		return layout{}, history{}, fmt.Errorf("manifest session ID %s does not match rollout %s", source.Manifest.SessionID, meta.ID)
 	}
 	if source.Manifest.Workspace != meta.CWD {
-		return layout{}, nil, fmt.Errorf("manifest workspace %s does not match rollout %s", source.Manifest.Workspace, meta.CWD)
+		return layout{}, history{}, fmt.Errorf("manifest workspace %s does not match rollout %s", source.Manifest.Workspace, meta.CWD)
 	}
-	return sourceLayout, rollout, nil
+	return sourceLayout, stored, nil
 }
 
 // isQuiescent reports whether an App Server status allows reading or replacing

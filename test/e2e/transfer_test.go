@@ -50,15 +50,15 @@ func TestTwoHomeTransfer(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if rollout, _ := exportedArchive.Data("rollout.jsonl"); !bytes.Equal(rollout, fixture.Data) {
+	if rollout, _ := exportedArchive.Data(fixture.Name); !bytes.Equal(rollout, fixture.Data) {
 		t.Fatal("export did not preserve the stored rollout bytes")
 	}
 	run(t, binary, codexPath, sourceHome, nil, true, "inspect", archivePath, "--json")
 
 	shortPath := filepath.Join(work, "short"+archive.Extension)
-	writeArchive(t, shortPath, fixture.Version, fixture.ID, sourceCWD, completedPrefix(t, fixture.Data, 2))
+	writeArchive(t, shortPath, fixture, sourceCWD, completedPrefix(t, fixture.Data, 2))
 	divergedPath := filepath.Join(work, "diverged"+archive.Extension)
-	writeArchive(t, divergedPath, fixture.Version, fixture.ID, sourceCWD, divergedCopy(t, fixture.Data))
+	writeArchive(t, divergedPath, fixture, sourceCWD, divergedCopy(t, fixture.Data))
 
 	assertOutput(t, run(t, binary, codexPath, targetHome, nil, true,
 		"import", shortPath, "--cwd", targetAlias), "imported")
@@ -105,6 +105,26 @@ func TestTwoHomeTransfer(t *testing.T) {
 		t.Fatalf("import changed an archived session: %v", err)
 	}
 
+	forkID := forkSession(t, codexPath, sourceHome, fixture.ID)
+	forkArchivePath := filepath.Join(work, "fork"+archive.Extension)
+	run(t, binary, codexPath, sourceHome, nil, true,
+		"export", "--all", forkID, "-o", forkArchivePath)
+	if files := len(decodeArchive(t, forkArchivePath).Manifest.Files); files != 2 {
+		t.Fatalf("fork archive has %d files, want the ancestor and the fork", files)
+	}
+	forkHome := mkdir(t, filepath.Join(work, "fork-home"))
+	forkCWD := mkdir(t, filepath.Join(work, "fork-workspace-with-a-longer-name"))
+	assertOutput(t, run(t, binary, codexPath, forkHome, nil, true,
+		"import", forkArchivePath, "--cwd", forkCWD), "imported")
+	assertOutput(t, run(t, binary, codexPath, forkHome, nil, true,
+		"import", forkArchivePath, "--cwd", forkCWD), "already up to date")
+	assertResumed(t, codexPath, forkHome, forkID, forkCWD, fixture)
+	run(t, binary, codexPath, forkHome, nil, false,
+		"import", forkArchivePath, "--cwd", pipeCWD, "--replace")
+	assertOutput(t, run(t, binary, codexPath, targetHome, nil, true,
+		"import", forkArchivePath, "--cwd", replacementCWD), "imported")
+	assertResumed(t, codexPath, targetHome, forkID, replacementCWD, fixture)
+
 	client, err := appserver.Start(context.Background(), codexPath, targetHome)
 	if err != nil {
 		t.Fatal(err)
@@ -134,8 +154,56 @@ func archiveSession(t *testing.T, codexPath, home, sessionID string) {
 	}
 }
 
+func forkSession(t *testing.T, codexPath, home, sessionID string) string {
+	t.Helper()
+	client, err := appserver.Start(context.Background(), codexPath, home)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer client.Close()
+	fork, err := client.Fork(sessionID)
+	if err != nil {
+		t.Fatalf("fork session: %v", err)
+	}
+	return fork.ID
+}
+
+func decodeArchive(t *testing.T, path string) archive.Archive {
+	t.Helper()
+	file, err := os.Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = file.Close() }()
+	decoded, err := archive.Decode(file)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return decoded
+}
+
+// assertResumed resumes sessionID in an isolated App Server and requires every
+// turn of the fixture history in workspace.
+func assertResumed(t *testing.T, codexPath, home, sessionID, workspace string, fixture rolloutFixture) {
+	t.Helper()
+	client, err := appserver.Start(context.Background(), codexPath, home)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer client.Close()
+	resumed, err := client.Resume(sessionID, "")
+	if err != nil {
+		t.Fatalf("resume %s: %v", sessionID, err)
+	}
+	want := bytes.Count(fixture.Data, []byte(`"type":"task_started"`))
+	if resumed.CWD != workspace || len(resumed.Turns) != want {
+		t.Fatalf("resumed %s has %d turns in %q, want %d in %q", sessionID, len(resumed.Turns), resumed.CWD, want, workspace)
+	}
+}
+
 type rolloutFixture struct {
 	ID      string
+	Name    string
 	Version string
 	Path    string
 	Data    []byte
@@ -145,7 +213,8 @@ type rolloutFixture struct {
 // to cwd, and returns the rollout Codex stored.
 func seedFixture(t *testing.T, binary, codexPath, work, home, cwd string) rolloutFixture {
 	t.Helper()
-	data, err := os.ReadFile(filepath.Join(moduleRoot(t), "testdata", "codex", "rollout.jsonl"))
+	name := "rollout-2026-11-09T01-37-58-01a1bdbd-8748-7a72-96ac-80bbb811e9c9.jsonl"
+	data, err := os.ReadFile(filepath.Join(moduleRoot(t), "testdata", "codex", name))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -161,7 +230,8 @@ func seedFixture(t *testing.T, binary, codexPath, work, home, cwd string) rollou
 		t.Fatal(err)
 	}
 	archivePath := filepath.Join(work, "fixture"+archive.Extension)
-	writeArchive(t, archivePath, first.Payload.CLIVersion, first.Payload.ID, first.Payload.CWD, data)
+	fixture := rolloutFixture{ID: first.Payload.ID, Name: name, Version: first.Payload.CLIVersion}
+	writeArchive(t, archivePath, fixture, first.Payload.CWD, data)
 	run(t, binary, codexPath, home, nil, true, "import", archivePath, "--cwd", cwd)
 	paths, err := filepath.Glob(filepath.Join(home, "sessions", "*", "*", "*", "rollout-*-"+first.Payload.ID+".jsonl"))
 	if err != nil || len(paths) != 1 {
@@ -171,18 +241,20 @@ func seedFixture(t *testing.T, binary, codexPath, work, home, cwd string) rollou
 	if err != nil {
 		t.Fatal(err)
 	}
-	return rolloutFixture{ID: first.Payload.ID, Version: first.Payload.CLIVersion, Path: paths[0], Data: stored}
+	fixture.Path, fixture.Data = paths[0], stored
+	return fixture
 }
 
-func writeArchive(t *testing.T, path, version, sessionID, workspace string, rollout []byte) {
+// writeArchive packs rollout as the fixture session's only payload.
+func writeArchive(t *testing.T, path string, fixture rolloutFixture, workspace string, rollout []byte) {
 	t.Helper()
 	created, err := archive.New(archive.Header{
 		Provider:        codex.Provider,
-		ProviderVersion: version,
-		SessionID:       sessionID,
+		ProviderVersion: fixture.Version,
+		SessionID:       fixture.ID,
 		Workspace:       workspace,
 		CreatedAt:       time.Now(),
-	}, []archive.Payload{{Path: "rollout.jsonl", Data: rollout}})
+	}, []archive.Payload{{Path: fixture.Name, Data: rollout}})
 	if err != nil {
 		t.Fatal(err)
 	}

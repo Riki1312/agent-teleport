@@ -60,11 +60,11 @@ Each entry uses this shape:
 - `rationale`: App Server reports sessions owned by another CLI process as unloaded, so runtime status alone cannot prove a turn is complete.
 - `impact`: Archives always end at a resumable turn boundary.
 
-### Reject histories that one payload cannot preserve
+### Carry forks with their ancestor prefixes
 
-- `decision`: Reject Codex rollouts with a non-null `history_base` or with divergent thread and session IDs until multi-file histories are implemented and tested.
-- `rationale`: Paginated histories and multi-agent children depend on other rollout files; a single file would appear valid while omitting most of the conversation.
-- `impact`: Modern Codex support starts with multi-file payloads.
+- `decision`: Export a forked Codex session with exactly the byte prefix of each ancestor rollout it references, root first under native file names. On import, rewrite the workspace in every file and set each descendant's byte offset to its rewritten ancestor's length; reuse a local ancestor only when it starts with that prefix, and never replace an ancestor. Verify forks by resuming their history root first in an App Server with goals, hooks, plugins, shell snapshots, and local automations disabled. Reject reverted threads and multi-agent child threads.
+- `rationale`: Prefixes are the minimal faithful history; rewriting ancestors keeps every file in the target workspace, which repository sessions need. Codex builds a fork's turns only after loading its ancestors, refuses to delete referenced threads, and locates revert snapshots through a database this project does not write.
+- `impact`: A fork cannot move to another workspace while its ancestor exists locally in the old one.
 
 ### Replace through a recoverable rollback link
 

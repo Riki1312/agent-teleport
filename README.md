@@ -35,7 +35,7 @@ Importing a session that already exists is safe to repeat: a longer archive upda
 
 An archive contains the session's recorded history and nothing else. Project files, uncommitted changes, credentials, running processes, and tool state stay on the source machine, so check out the same code before resuming. Archives can contain prompts, command output, file contents, and secrets printed during the session: treat them as sensitive.
 
-Sessions that span several history files, such as multi-agent threads and modern paginated histories, are rejected rather than exported incompletely.
+A forked session travels with the part of each ancestor session it continues. Reverted sessions and multi-agent child threads are rejected rather than exported incompletely.
 
 ## Development
 

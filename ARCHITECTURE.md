@@ -75,7 +75,18 @@ A packed archive is a gzip-compressed tar file with the `.teleport` extension. I
   "session_id": "01a09a34-754a-7343-8d40-37a2af117f2f",
   "workspace": "/home/alice/src/example",
   "created_at": "2026-11-09T09:58:44Z",
-  "files": [{ "path": "rollout.jsonl", "size": 48213, "sha256": "…" }]
+  "files": [
+    {
+      "path": "rollout-2026-11-09T01-37-58-01a1bdbd-….jsonl",
+      "size": 39742,
+      "sha256": "…"
+    },
+    {
+      "path": "rollout-2026-11-09T13-05-32-01a1c033-….jsonl",
+      "size": 1580,
+      "sha256": "…"
+    }
+  ]
 }
 ```
 
@@ -109,18 +120,20 @@ Codex storage is a private implementation detail. The adapter prefers Codex App 
 1. Discover sessions through App Server `thread/list`, asking for every user-started source explicitly: App Server lists only interactive sources by default, which hides `codex exec` sessions.
 2. Require an idle or unloaded thread. App Server cannot see turns running in another Codex process, so every turn started in the rollout must also have ended, by completing or being aborted.
 3. Read the rollout and fail if its size or modification time changed during the read.
-4. Validate the session identity and reject layouts that one archive cannot preserve: a non-null `history_base`, which refers to other rollout files, and divergent thread and session IDs, which multi-agent child threads use.
-5. Build the archive in memory, verify it, and write it.
+4. Follow the history. A forked rollout starts with a `history_base` that references a byte prefix of its parent's rollout, which may itself be a fork. Read exactly that prefix of each ancestor, root first.
+5. Validate every file and the history as a whole: consistent identities and references, and every started turn ended. Reject reverted threads, whose current history is a snapshot file that Codex locates through its own database, and multi-agent child threads, whose session ID names their parent.
+6. Build the archive in memory with the files root first under their native names, verify it, and write it.
 
 ### Import
 
 1. Decode and validate the whole archive in memory.
 2. Require the archive's Codex version and the installed version to share a rollout layout.
 3. Canonicalize the target workspace, resolving symlinks in its existing ancestors.
-4. Rewrite workspace paths: every mention of the source workspace, at path boundaries, inside the JSON strings of workspace metadata events. This covers plain paths, paths below the workspace, `file://` URIs, and paths embedded in Codex-generated text. Other bytes are preserved, and the import fails unless rewriting back would restore the original bytes.
-5. Find the session's files in the active and archived session stores, including recovery files of an interrupted replacement, and recover that replacement first. Codex lists only active threads, so the stores are the source of truth. An existing active rollout is updated where it is; a new one is named after its local creation time, as Codex names rollouts.
-6. Apply the update rule. A new rollout is written to a stage file and hard-linked into place, so Codex never sees a partial file and an existing one is never overwritten.
-7. Let App Server scan and repair its state, then require the scan, the state database, and `thread/read` to agree on the session and its workspace. A failed verification deletes the new session again.
+4. Rewrite workspace paths in every file: every mention of the session's workspace, at path boundaries, inside the JSON strings of workspace metadata events. This covers plain paths, paths below the workspace, `file://` URIs, and paths embedded in Codex-generated text. Other bytes are preserved, and the import fails unless rewriting back would restore the original bytes. Rewriting an ancestor changes its length, so each descendant's `history_base` byte offset is set to the rewritten ancestor's length.
+5. Place missing ancestors. An ancestor that exists locally is reused when it starts with the referenced prefix; otherwise the import fails, because replacing an ancestor would change the history of its other forks, and Codex refuses to delete a thread that forks reference.
+6. Find the session's files in the active and archived session stores, including recovery files of an interrupted replacement, and recover that replacement first. Codex lists only active threads, so the stores are the source of truth. An existing active rollout is updated where it is; a new one is named after its local creation time, as Codex names rollouts.
+7. Apply the update rule. A new rollout is written to a stage file under its native name and hard-linked into place, so Codex never sees a partial file and an existing one is never overwritten.
+8. Let App Server scan and repair its state, then verify. A self-contained session must appear with the target workspace in the scan, the state database, and `thread/read`. Codex lists a fork only once it has turns of its own and builds a fork's turns only after loading its ancestors, so a fork is verified by resuming its history root first in a separate App Server with goals, hooks, plugins, shell snapshots, and local automations disabled; the session must replay every turn of its history. A failed verification deletes the new session again; placed ancestors remain, as they are complete sessions of their own.
 
 A dry run performs every check up to the update decision and never starts App Server.
 
@@ -140,7 +153,7 @@ Any failure or interruption before the commit point restores the old rollout, de
 
 Each rollout layout covers a range of Codex versions: its turn boundary events and its workspace metadata events. The current layout starts at Codex 0.165.0 and is tested through 0.167.0. Older versions fail closed. Newer versions are accepted with a `doctor` warning, because Codex releases every few days, while structural validation still rejects rollouts it does not recognize. CI runs the two-home test against every tested version, and raising the tested range requires it to pass against the new release. Older layouts are removed rather than kept.
 
-Standalone sessions are supported. Forks and other histories that span several rollout files, and multi-agent child threads, are rejected until multi-file payloads are implemented. Codex App Server can fork a thread natively with `thread/fork`, which repository sessions will use for `save --as`.
+Self-contained sessions and forks are supported. Reverted threads and multi-agent child threads are rejected. Codex App Server forks a thread natively with `thread/fork`, which repository sessions will use for `save --as`, and `export` accepts the full ID of a fork that Codex does not list yet.
 
 ## Repository sessions (planned)
 

@@ -47,19 +47,25 @@ type ImportResult struct {
 }
 
 // Import validates an archive for the installed Codex version, maps it to
-// request.Workspace, and makes it available through Codex. An existing copy of
-// the session is updated only when the archive extends it. Nothing changes
-// before validation succeeds, and a dry run never starts App Server.
+// request.Workspace, and makes it available through Codex. Ancestors of a
+// forked session are placed first or reused when they already exist locally;
+// the session itself is updated only when the archive extends it. Nothing
+// changes before validation succeeds, and a dry run never starts App Server.
 func (s *Store) Import(request ImportRequest) (ImportResult, error) {
-	rollout, meta, err := s.prepareRollout(request.Archive, request.Workspace)
+	imported, err := s.prepareHistory(request.Archive, request.Workspace)
 	if err != nil {
 		return ImportResult{}, err
 	}
-	stored, err := findSession(s.home, meta.ID)
+	session := imported.session()
+	ancestors, err := s.planAncestors(imported.files[:len(imported.files)-1])
 	if err != nil {
 		return ImportResult{}, err
 	}
-	destination, err := importDestination(stored, s.home, meta)
+	stored, err := findSession(s.home, session.meta.ID)
+	if err != nil {
+		return ImportResult{}, err
+	}
+	destination, err := importDestination(stored, s.home, session.name)
 	if err != nil {
 		return ImportResult{}, err
 	}
@@ -72,26 +78,31 @@ func (s *Store) Import(request ImportRequest) (ImportResult, error) {
 		if client, err = s.appServer(); err != nil {
 			return ImportResult{}, err
 		}
-		if err := s.layout.recoverReplacement(destination, meta.ID, resetThread(client, meta.ID), repairThread(client)); err != nil {
+		if err := s.layout.recoverReplacement(destination, session.meta.ID, resetThread(client, session.meta.ID), s.repairThread(client, destination)); err != nil {
 			return ImportResult{}, err
 		}
-		if stored, err = findSession(s.home, meta.ID); err != nil {
+		if stored, err = findSession(s.home, session.meta.ID); err != nil {
 			return ImportResult{}, err
 		}
 	}
-	outcome, err := s.planImport(stored, destination, rollout, meta, request.Replace)
+	outcome, err := s.planImport(stored, destination, session, request.Replace)
 	if err != nil {
 		return ImportResult{}, err
 	}
-	result := ImportResult{SessionID: meta.ID, Workspace: meta.CWD, Outcome: outcome}
+	result := ImportResult{SessionID: session.meta.ID, Workspace: session.meta.CWD, Outcome: outcome}
 	if request.DryRun {
 		return result, nil
 	}
+	for _, ancestor := range ancestors {
+		if err := s.placeRollout(ancestor.path, ancestor.data); err != nil {
+			return ImportResult{}, fmt.Errorf("place ancestor session: %w", err)
+		}
+	}
 	switch outcome {
 	case Imported:
-		err = s.placeNew(client, destination, rollout, meta)
+		err = s.placeNew(client, destination, session)
 	case Updated, Replaced:
-		err = s.replaceExisting(client, destination, rollout, meta)
+		err = s.replaceExisting(client, destination, session)
 	}
 	if err != nil {
 		return ImportResult{}, err
@@ -99,65 +110,115 @@ func (s *Store) Import(request ImportRequest) (ImportResult, error) {
 	return result, nil
 }
 
-// prepareRollout validates an archive for the installed Codex version and
-// returns its rollout mapped to workspace.
-func (s *Store) prepareRollout(source archive.Archive, workspace string) ([]byte, sessionMeta, error) {
-	sourceLayout, rollout, err := validateArchive(source)
+// prepareHistory validates an archive for the installed Codex version and
+// returns its history mapped to workspace.
+func (s *Store) prepareHistory(source archive.Archive, workspace string) (history, error) {
+	sourceLayout, imported, err := validateArchive(source)
 	if err != nil {
-		return nil, sessionMeta{}, err
+		return history{}, err
 	}
 	if sourceLayout.minimum != s.layout.minimum {
-		return nil, sessionMeta{}, fmt.Errorf("archive from Codex %s uses a rollout layout that Codex %s does not read", source.Manifest.ProviderVersion, s.version)
+		return history{}, fmt.Errorf("archive from Codex %s uses a rollout layout that Codex %s does not read", source.Manifest.ProviderVersion, s.version)
 	}
-	meta, err := sourceLayout.validateRollout(rollout)
+	remapped, err := s.layout.remapHistory(imported, workspace)
 	if err != nil {
-		return nil, sessionMeta{}, err
+		return history{}, fmt.Errorf("remap workspace: %w", err)
 	}
-	if workspace == meta.CWD {
-		return rollout, meta, nil
+	return remapped, nil
+}
+
+// ancestorPlacement is an ancestor rollout that an import must place.
+type ancestorPlacement struct {
+	path string
+	data []byte
+}
+
+// planAncestors returns the ancestors missing locally. An ancestor that exists
+// locally must already start with the prefix the history references, because
+// replacing an ancestor would change the history of its other forks.
+func (s *Store) planAncestors(ancestors []rolloutFile) ([]ancestorPlacement, error) {
+	var placements []ancestorPlacement
+	for _, ancestor := range ancestors {
+		stored, err := findSession(s.home, ancestor.meta.ID)
+		if err != nil {
+			return nil, err
+		}
+		switch {
+		case len(stored.pending) > 0:
+			return nil, fmt.Errorf("ancestor session %s has an interrupted replacement; import that session first", ancestor.meta.ID)
+		case len(stored.archived) > 0 || len(stored.snapshots) > 0 || len(stored.active) > 1:
+			return nil, fmt.Errorf("ancestor session %s exists locally as an archived, reverted, or duplicated thread; restore it in Codex first", ancestor.meta.ID)
+		case len(stored.active) == 1:
+			local, err := readStable(stored.active[0])
+			if err != nil {
+				return nil, fmt.Errorf("read ancestor session %s: %w", ancestor.meta.ID, err)
+			}
+			if bytes.HasPrefix(local, ancestor.data) {
+				continue
+			}
+			if localMeta, err := parseRollout(local); err == nil && localMeta.CWD != ancestor.meta.CWD {
+				return nil, fmt.Errorf("ancestor session %s exists in %s; import the fork there with --cwd", ancestor.meta.ID, localMeta.CWD)
+			}
+			return nil, fmt.Errorf("ancestor session %s differs locally from the history in the archive", ancestor.meta.ID)
+		default:
+			path, err := activeRolloutPath(s.home, ancestor.name)
+			if err != nil {
+				return nil, err
+			}
+			placements = append(placements, ancestorPlacement{path: path, data: ancestor.data})
+		}
 	}
-	rollout, meta, err = s.layout.remapWorkspace(rollout, workspace)
-	if err != nil {
-		return nil, sessionMeta{}, fmt.Errorf("remap workspace: %w", err)
-	}
-	return rollout, meta, nil
+	return placements, nil
 }
 
 // importDestination returns the rollout path an import writes: the path of an
-// interrupted write, the existing active rollout, or a new path named the way
-// Codex names it.
-func importDestination(stored storedSession, home string, meta sessionMeta) (string, error) {
+// interrupted write, the existing active rollout, or the native file name in
+// the active store.
+func importDestination(stored storedSession, home, name string) (string, error) {
 	switch {
 	case len(stored.pending) > 1:
-		return "", fmt.Errorf("session %s has several interrupted writes: %s", meta.ID, strings.Join(stored.pending, ", "))
+		return "", fmt.Errorf("session has several interrupted writes: %s", strings.Join(stored.pending, ", "))
 	case len(stored.pending) == 1:
 		return stored.pending[0], nil
 	case len(stored.active) == 1:
 		return stored.active[0], nil
 	default:
-		return rolloutPath(home, meta), nil
+		return activeRolloutPath(home, name)
 	}
 }
 
-// planImport decides how to import rollout without changing local state.
-func (s *Store) planImport(stored storedSession, destination string, rollout []byte, meta sessionMeta, replace bool) (ImportOutcome, error) {
+// planImport decides how to import the session rollout without changing local
+// state.
+func (s *Store) planImport(stored storedSession, destination string, session rolloutFile, replace bool) (ImportOutcome, error) {
+	id := session.meta.ID
 	if len(stored.archived) > 0 {
-		return "", fmt.Errorf("session %s is archived at %s; restore or delete it in Codex before importing it", meta.ID, strings.Join(stored.archived, ", "))
+		return "", fmt.Errorf("session %s is archived at %s; restore or delete it in Codex before importing it", id, strings.Join(stored.archived, ", "))
+	}
+	if len(stored.snapshots) > 0 {
+		return "", fmt.Errorf("session %s has been reverted locally; reverted Codex threads are not supported", id)
 	}
 	if len(stored.active) == 0 {
 		return Imported, nil
 	}
 	if len(stored.active) > 1 || filepath.Clean(stored.active[0]) != filepath.Clean(destination) {
-		return "", fmt.Errorf("session %s has several rollouts: %s", meta.ID, strings.Join(stored.active, ", "))
+		return "", fmt.Errorf("session %s has several rollouts: %s", id, strings.Join(stored.active, ", "))
 	}
-	local, localMeta, err := s.layout.stableRollout(destination)
+	local, err := readStable(destination)
 	if err != nil {
-		return "", fmt.Errorf("read existing session %s: %w", meta.ID, err)
+		return "", fmt.Errorf("read existing session %s: %w", id, err)
 	}
-	if localMeta.CWD != meta.CWD && !replace {
-		return "", fmt.Errorf("session %s already exists in %s; import there with --cwd, or pass --replace", meta.ID, localMeta.CWD)
+	localMeta, err := parseRollout(local)
+	if err != nil {
+		return "", fmt.Errorf("read existing session %s: %w", id, err)
 	}
-	switch compareHistories(local, rollout) {
+	var localTurns turnState
+	if err := s.layout.advanceTurns(&localTurns, local); err != nil || localTurns.open {
+		return "", fmt.Errorf("existing session %s has a turn in progress", id)
+	}
+	if localMeta.CWD != session.meta.CWD && !replace {
+		return "", fmt.Errorf("session %s already exists in %s; import there with --cwd, or pass --replace", id, localMeta.CWD)
+	}
+	switch compareHistories(local, session.data) {
 	case historiesEqual:
 		return Unchanged, nil
 	case incomingAhead:
@@ -166,7 +227,7 @@ func (s *Store) planImport(stored storedSession, destination string, rollout []b
 		return KeptNewer, nil
 	}
 	if !replace {
-		return "", fmt.Errorf("session %s has diverged from the archive; pass --replace to overwrite the local copy", meta.ID)
+		return "", fmt.Errorf("session %s has diverged from the archive; pass --replace to overwrite the local copy", id)
 	}
 	return Replaced, nil
 }
@@ -198,13 +259,14 @@ func compareHistories(local, incoming []byte) historyComparison {
 }
 
 // placeNew places the rollout of a new session and verifies its repair. A
-// failed verification deletes the new session again.
-func (s *Store) placeNew(client *appserver.Client, destination string, rollout []byte, meta sessionMeta) error {
-	if err := s.placeRollout(destination, rollout); err != nil {
+// failed verification deletes the new session again; placed ancestors remain,
+// since they are complete sessions of their own.
+func (s *Store) placeNew(client *appserver.Client, destination string, session rolloutFile) error {
+	if err := s.placeRollout(destination, session.data); err != nil {
 		return err
 	}
-	if err := verifyRepair(client, meta.ID, meta.CWD); err != nil {
-		if cleanupErr := client.Delete(meta.ID); cleanupErr != nil {
+	if err := s.verifySession(client, destination, session.meta); err != nil {
+		if cleanupErr := client.Delete(session.meta.ID); cleanupErr != nil {
 			return fmt.Errorf("repair imported session: %w; cleanup also failed: %v", err, cleanupErr)
 		}
 		return fmt.Errorf("repair imported session: %w", err)
@@ -214,20 +276,17 @@ func (s *Store) placeNew(client *appserver.Client, destination string, rollout [
 
 // replaceExisting replaces a quiescent local session through the recoverable
 // replacement transaction.
-func (s *Store) replaceExisting(client *appserver.Client, destination string, rollout []byte, meta sessionMeta) error {
+func (s *Store) replaceExisting(client *appserver.Client, destination string, session rolloutFile) error {
+	id := session.meta.ID
 	threads, err := client.List(appserver.ListQuery{SourceKinds: allSources})
 	if err != nil {
 		return fmt.Errorf("check existing session: %w", err)
 	}
-	thread := findThread(threads, meta.ID)
-	if thread == nil {
-		return fmt.Errorf("Codex does not list existing session %s", meta.ID)
+	if thread := findThread(threads, id); thread != nil && !isQuiescent(thread.Status.Type) {
+		return fmt.Errorf("existing session %s is not quiescent (status %q)", id, thread.Status.Type)
 	}
-	if !isQuiescent(thread.Status.Type) {
-		return fmt.Errorf("existing session %s is not quiescent (status %q)", meta.ID, thread.Status.Type)
-	}
-	if err := s.layout.replaceRollout(destination, rollout, meta, resetThread(client, meta.ID), repairThread(client), nil); err != nil {
-		return fmt.Errorf("replace session %s: %w", meta.ID, err)
+	if err := s.layout.replaceRollout(destination, session.data, session.meta, resetThread(client, id), s.repairThread(client, destination), nil); err != nil {
+		return fmt.Errorf("replace session %s: %w", id, err)
 	}
 	return nil
 }
@@ -236,8 +295,8 @@ func resetThread(client *appserver.Client, sessionID string) resetThreadFunc {
 	return func() error { return client.Delete(sessionID) }
 }
 
-func repairThread(client *appserver.Client) repairThreadFunc {
-	return func(meta sessionMeta) error { return verifyRepair(client, meta.ID, meta.CWD) }
+func (s *Store) repairThread(client *appserver.Client, destination string) repairThreadFunc {
+	return func(meta sessionMeta) error { return s.verifySession(client, destination, meta) }
 }
 
 // placeRollout writes a new rollout through the stage file and links it into
@@ -266,14 +325,19 @@ func (s *Store) placeRollout(destination string, rollout []byte) error {
 	return syncDirectory(directory)
 }
 
-// verifyRepair lets Codex scan and repair the session, then requires that the
-// scan, the persisted state, and a thread read all report the target workspace.
-func verifyRepair(client *appserver.Client, id, cwd string) error {
+// verifySession lets Codex scan and repair the session whose rollout is at
+// destination, then checks the result. A self-contained session must appear in
+// the scan, the persisted state, and a thread read with the target workspace.
+// A fork is verified by loading its history; see verifyFork.
+func (s *Store) verifySession(client *appserver.Client, destination string, meta sessionMeta) error {
+	if meta.Base != nil {
+		return s.verifyFork(client, destination, meta)
+	}
 	threads, err := client.List(appserver.ListQuery{SourceKinds: allSources})
 	if err != nil {
 		return err
 	}
-	thread := findThread(threads, id)
+	thread := findThread(threads, meta.ID)
 	if thread == nil {
 		return errors.New("Codex App Server did not discover the imported session")
 	}
@@ -281,18 +345,59 @@ func verifyRepair(client *appserver.Client, id, cwd string) error {
 	if err != nil {
 		return err
 	}
-	stateThread := findThread(stateThreads, id)
+	stateThread := findThread(stateThreads, meta.ID)
 	if stateThread == nil {
 		return errors.New("Codex App Server did not persist the imported session")
 	}
-	readThread, err := client.Read(id)
+	readThread, err := client.Read(meta.ID)
 	if err != nil {
 		return err
 	}
-	if thread.CWD != cwd || stateThread.CWD != cwd || readThread.CWD != cwd {
-		return fmt.Errorf("repaired workspace does not match target %q (scan %q, state %q, read %q)", cwd, thread.CWD, stateThread.CWD, readThread.CWD)
+	if thread.CWD != meta.CWD || stateThread.CWD != meta.CWD || readThread.CWD != meta.CWD {
+		return fmt.Errorf("repaired workspace does not match target %q (scan %q, state %q, read %q)", meta.CWD, thread.CWD, stateThread.CWD, readThread.CWD)
 	}
 	return nil
+}
+
+// verifyFork verifies a forked session. Codex lists a fork only once it has
+// turns of its own, and builds a fork's turns only after loading its
+// ancestors, so the history is loaded root first in a separate App Server
+// that cannot start turns, hooks, or automations. The session must then
+// replay every turn of its history.
+func (s *Store) verifyFork(client *appserver.Client, destination string, meta sessionMeta) error {
+	if _, err := client.List(appserver.ListQuery{SourceKinds: allSources}); err != nil {
+		return err
+	}
+	local, err := s.layout.readHistory(s.home, destination)
+	if err != nil {
+		return err
+	}
+	loader, err := appserver.Start(s.ctx, s.binary, s.home, safeLoadArguments...)
+	if err != nil {
+		return fmt.Errorf("start Codex App Server to load the session history: %w", err)
+	}
+	defer loader.Close()
+	for index, file := range local.files {
+		thread, err := loader.Resume(file.meta.ID, "")
+		if err != nil {
+			return fmt.Errorf("load session %s: %w", file.meta.ID, err)
+		}
+		if index == len(local.files)-1 && (len(thread.Turns) != local.turns || thread.CWD != meta.CWD) {
+			return fmt.Errorf("loaded session has %d turns in %q, want %d turns in %q", len(thread.Turns), thread.CWD, local.turns, meta.CWD)
+		}
+	}
+	return nil
+}
+
+// safeLoadArguments start an App Server that loads histories without running
+// anything: no automatic goals, hooks, plugins, shell snapshots, or local
+// automations.
+var safeLoadArguments = []string{
+	"--disable", "goals",
+	"--disable", "hooks",
+	"--disable", "plugins",
+	"--disable", "shell_snapshot",
+	"--disable", "in_app_local_automation",
 }
 
 func findThread(threads []appserver.Thread, id string) *appserver.Thread {

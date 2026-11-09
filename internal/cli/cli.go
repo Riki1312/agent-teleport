@@ -71,6 +71,15 @@ func (a *App) Run(ctx context.Context, args []string) error {
 // errHelp reports that a command printed its help and should succeed.
 var errHelp = errors.New("help requested")
 
+// errNoMatch reports that no listed session matches a selector.
+var errNoMatch = errors.New("no session matches")
+
+// isSessionID reports whether selector has the shape of a full session ID,
+// which export can look up even when Codex does not list the session.
+func isSessionID(selector string) bool {
+	return len(selector) == 36 && strings.Count(selector, "-") == 4
+}
+
 // sessionEntry is the stable JSON representation of a listed session.
 type sessionEntry struct {
 	Provider  string    `json:"provider"`
@@ -167,6 +176,9 @@ func (a *App) export(ctx context.Context, args []string) error {
 		return err
 	}
 	session, err := selectSession(sessions, selector, *last)
+	if errors.Is(err, errNoMatch) && isSessionID(selector) {
+		session, err = store.Session(selector)
+	}
 	if err != nil {
 		return err
 	}
@@ -455,7 +467,7 @@ func selectSession(sessions []codex.Session, selector string, last bool) (codex.
 		}
 	}
 	if len(matches) == 0 {
-		return codex.Session{}, fmt.Errorf("no session matches %q", selector)
+		return codex.Session{}, fmt.Errorf("%w %q", errNoMatch, selector)
 	}
 	if len(matches) > 1 {
 		return codex.Session{}, fmt.Errorf("session selector %q is ambiguous", selector)

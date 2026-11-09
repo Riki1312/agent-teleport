@@ -35,7 +35,8 @@ Usage:
   agent-teleport export (SESSION | --last) [--all] [-o PATH|-]
 
 SESSION is a session ID, a unique ID prefix, or an exact session title.
-Only sessions whose last turn has completed can be exported.
+Only sessions whose last turn has completed can be exported. A forked
+session carries the part of each ancestor session it continues.
 
 Options:
   --last            Export the most recently updated session

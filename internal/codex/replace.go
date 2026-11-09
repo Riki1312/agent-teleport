@@ -76,14 +76,14 @@ func (l layout) replaceRollout(
 	if err := l.recoverReplacement(destination, meta.ID, reset, repair); err != nil {
 		return fmt.Errorf("recover interrupted replacement: %w", err)
 	}
-	_, oldMeta, err := l.stableRollout(destination)
+	oldMeta, err := readRolloutMeta(destination)
 	if err != nil {
 		return fmt.Errorf("validate existing rollout: %w", err)
 	}
 	if oldMeta.ID != meta.ID {
 		return fmt.Errorf("existing rollout has session ID %s, want %s", oldMeta.ID, meta.ID)
 	}
-	replacementMeta, err := l.validateRollout(replacement)
+	replacementMeta, err := parseRollout(replacement)
 	if err != nil {
 		return fmt.Errorf("validate replacement rollout: %w", err)
 	}
@@ -167,7 +167,7 @@ func (l layout) rollbackAfterError(
 
 func (l layout) restoreRollback(destination, sessionID string, reset resetThreadFunc, repair repairThreadFunc) error {
 	rollback := rollbackPath(destination)
-	_, oldMeta, err := l.stableRollout(rollback)
+	oldMeta, err := readRolloutMeta(rollback)
 	if err != nil {
 		return fmt.Errorf("validate rollback rollout: %w", err)
 	}
@@ -196,6 +196,16 @@ func (l layout) restoreRollback(destination, sessionID string, reset resetThread
 		return fmt.Errorf("remove abandoned replacement stage: %w", err)
 	}
 	return syncDirectory(filepath.Dir(destination))
+}
+
+// readRolloutMeta reads the identity of the rollout at path. The history it
+// belongs to was validated before the transaction started.
+func readRolloutMeta(path string) (sessionMeta, error) {
+	data, err := readStable(path)
+	if err != nil {
+		return sessionMeta{}, err
+	}
+	return parseRollout(data)
 }
 
 func runCheckpoint(checkpoint checkpointFunc, phase replacePhase) error {
