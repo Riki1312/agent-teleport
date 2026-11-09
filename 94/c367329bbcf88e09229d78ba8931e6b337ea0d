@@ -1,0 +1,52 @@
+internal/claude/claude.go
+  s_b3feabb7857cd3::t_561130aa91fc9e 120-124,127,133,138,153,198,238,247,255,283
+  s_b3feabb7857cd3::t_fd3f44241a1da7 294
+ARCHITECTURE.md
+  s_b3feabb7857cd3::t_ccec063c9004dc 208
+  ai_agent 139,187
+internal/claude/layout.go
+  s_b3feabb7857cd3::t_ccec063c9004dc 21
+internal/claude/transcript_test.go
+  s_b3feabb7857cd3::t_fd3f44241a1da7 5,53
+  s_b3feabb7857cd3::t_ccec063c9004dc 166-167
+context/current.md
+  ai_agent 73-74
+  s_b3feabb7857cd3::t_ccec063c9004dc 6,18,62
+internal/claude/import.go
+  s_b3feabb7857cd3::t_561130aa91fc9e 32,101
+  s_b3feabb7857cd3::t_fd3f44241a1da7 93-94,196
+.github/workflows/ci.yml
+  s_b3feabb7857cd3::t_ccec063c9004dc 45-46
+internal/codex/import.go
+  s_b3feabb7857cd3::t_a9f450712ac73e 326-327
+internal/claude/transcript.go
+  s_b3feabb7857cd3::t_561130aa91fc9e 8,33-36,64-65,86,125-134
+internal/claude/session.go
+  s_b3feabb7857cd3::t_561130aa91fc9e 13,35-37,64-80,94-95,97-98,139,232,257-258,264-272,275-276,282-286,318-321
+internal/codex/session.go
+  s_b3feabb7857cd3::t_a9f450712ac73e 300,304
+context/decisions.md
+  s_b3feabb7857cd3::t_ccec063c9004dc 73
+internal/claude/import_test.go
+  s_b3feabb7857cd3::t_fd3f44241a1da7 347-377
+internal/codex/session_test.go
+  s_b3feabb7857cd3::t_ff3a779f4eb18c 256-285
+README.md
+  s_b3feabb7857cd3::t_ccec063c9004dc 9
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.2",
+  "base_commit_sha": "94c367329bbcf88e09229d78ba8931e6b337ea0d",
+  "prompts": {},
+  "sessions": {
+    "s_b3feabb7857cd3": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "fd1b6ebe-1b52-4a20-8b44-740169df5be6",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Riccardo <riki.brero@gmail.com>"
+    }
+  }
+}
