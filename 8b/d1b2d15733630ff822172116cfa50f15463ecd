@@ -1,0 +1,58 @@
+context/decisions.md
+  s_b3feabb7857cd3::t_d1fe8f973a0829 21,99,101-103
+internal/codex/codex.go
+  s_b3feabb7857cd3::t_7a2ad5e85a3e94 43,238-284
+  s_b3feabb7857cd3::t_e7570c42a196f2 22
+internal/codex/import.go
+  s_b3feabb7857cd3::t_7a2ad5e85a3e94 63,65,67
+internal/codex/rollout.go
+  s_b3feabb7857cd3::t_7a2ad5e85a3e94 150-155,157,164,167,170,172
+internal/claude/transcript.go
+  s_b3feabb7857cd3::t_9ca9f6f60805a5 130-132,138,140
+internal/claude/claude.go
+  s_b3feabb7857cd3::t_9ca9f6f60805a5 24,49,201-287
+internal/codex/session.go
+  s_b3feabb7857cd3::t_e7570c42a196f2 17
+  s_b3feabb7857cd3::t_7a2ad5e85a3e94 512-513,515-516,532
+internal/codex/rollout_test.go
+  s_b3feabb7857cd3::t_702dbda26d040c 17,20-23,27-28,30-31,33-34,38,57,61,65,71,78-79,83,92,99-100,104,113,117,121,125,128-129,133,137-138,142,146-152,156,163-169,173,179,197-203,336-360
+  s_b3feabb7857cd3::t_d41dfa17aa0892 39-40,46,50,56,59-60
+internal/codex/session_test.go
+  s_b3feabb7857cd3::t_881a78e061d5b5 94,98
+internal/provider/provider.go
+  s_b3feabb7857cd3::t_7a2ad5e85a3e94 39-43
+ARCHITECTURE.md
+  s_b3feabb7857cd3::t_d1fe8f973a0829 11,26,148,194
+  ai_agent 112,232
+internal/claude/transcript_test.go
+  s_b3feabb7857cd3::t_6de46829d65dec 4,112,121,126,133,136-137,141,146,149,152-153
+test/e2e/claude_test.go
+  s_b3feabb7857cd3::t_90a56983fed2a5 53,56,95,493-496,498,500,503,505,507,511,514-515
+internal/claude/import.go
+  s_b3feabb7857cd3::t_9ca9f6f60805a5 45,54
+context/current.md
+  ai_agent 16,21
+internal/pathmap/pathmap.go
+  s_b3feabb7857cd3::t_7a2ad5e85a3e94 53-57,221-228
+  s_b3feabb7857cd3::t_9ca9f6f60805a5 88-98
+internal/claude/import_test.go
+  s_b3feabb7857cd3::t_90a56983fed2a5 260-298
+README.md
+  s_b3feabb7857cd3::t_d1fe8f973a0829 38
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.2",
+  "base_commit_sha": "8bd1b2d15733630ff822172116cfa50f15463ecd",
+  "prompts": {},
+  "sessions": {
+    "s_b3feabb7857cd3": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "fd1b6ebe-1b52-4a20-8b44-740169df5be6",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Riccardo <riki.brero@gmail.com>"
+    }
+  }
+}
