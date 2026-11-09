@@ -548,14 +548,15 @@ func (a *App) sessions(opened stores, includeAll bool) ([]provider.Session, erro
 	return sessions, nil
 }
 
-// sessionSelector returns the session selector among positional, which
-// must hold one selector unless last is set.
+// sessionSelector returns the session selector among positional, which holds
+// at most one, and none together with last. An empty selector without last
+// selects the current session.
 func sessionSelector(positional []string, last bool, commandUsage string) (string, error) {
 	switch {
 	case len(positional) > 1:
 		return "", &UsageError{Message: "at most one session selector is accepted"}
-	case len(positional) == 0 && !last:
-		return "", &UsageError{Message: "a SESSION or --last is required\n\n" + commandUsage}
+	case len(positional) == 0 && !last && !insideAgent():
+		return "", errNoSelection
 	case len(positional) == 1 && last:
 		return "", &UsageError{Message: "SESSION and --last cannot be used together"}
 	case len(positional) == 1:
@@ -567,8 +568,12 @@ func sessionSelector(positional []string, last bool, commandUsage string) (strin
 
 // selectStoredSession selects a session of the current directory, or of
 // every directory with includeAll, by selector or as the latest one. A full
-// session ID is also looked up when no provider lists it.
+// session ID is also looked up when no provider lists it. Without a selector
+// it selects the session of the agent that runs agent-teleport.
 func (a *App) selectStoredSession(opened stores, selector string, last, includeAll bool) (provider.Session, error) {
+	if selector == "" && !last {
+		return opened.current()
+	}
 	sessions, err := a.sessions(opened, includeAll)
 	if err != nil {
 		return provider.Session{}, err
@@ -578,6 +583,42 @@ func (a *App) selectStoredSession(opened stores, selector string, last, includeA
 		session, err = opened.session(selector)
 	}
 	return session, err
+}
+
+// errNoSelection reports a command that needs a session but was given none
+// outside an agent.
+var errNoSelection = &UsageError{Message: "name a SESSION or pass --last; inside Codex or Claude Code, the current session is the default"}
+
+// insideAgent reports whether an agent runs agent-teleport.
+func insideAgent() bool {
+	for _, adapter := range adapters {
+		if _, ok := adapter.Current(); ok {
+			return true
+		}
+	}
+	return false
+}
+
+// current returns the session of the agent that runs agent-teleport.
+func (s stores) current() (provider.Session, error) {
+	var found []provider.Adapter
+	for _, adapter := range adapters {
+		if _, ok := adapter.Current(); ok {
+			found = append(found, adapter)
+		}
+	}
+	switch {
+	case len(found) == 0:
+		return provider.Session{}, errNoSelection
+	case len(found) > 1:
+		return provider.Session{}, errors.New("both Codex and Claude Code run this command, so the current session is ambiguous; name a SESSION")
+	}
+	store, ok := s[found[0].ID]
+	if !ok {
+		return provider.Session{}, fmt.Errorf("%s runs this command but cannot be used", found[0].Name)
+	}
+	id, _ := found[0].Current()
+	return store.Session(id)
 }
 
 // session looks up a full session ID in every store.

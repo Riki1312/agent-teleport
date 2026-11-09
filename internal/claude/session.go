@@ -1,6 +1,7 @@
 package claude
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -134,7 +135,7 @@ func newSession(sessionID string, files []sessionFile) (claudeSession, error) {
 // an unknown layout.
 func readLocalFiles(folder, sessionID string) ([]sessionFile, error) {
 	var files []sessionFile
-	transcript, err := fsutil.ReadStable(filepath.Join(folder, sessionID+".jsonl"))
+	transcript, err := readRecords(filepath.Join(folder, sessionID+".jsonl"))
 	switch {
 	case err == nil:
 		files = append(files, sessionFile{path: sessionID + ".jsonl", data: transcript})
@@ -163,7 +164,12 @@ func readLocalFiles(folder, sessionID string) ([]sessionFile, error) {
 		if !entry.Type().IsRegular() {
 			return fmt.Errorf("session file %s is not a regular file", filePath)
 		}
-		data, err := fsutil.ReadStable(current)
+		kind, _, _ := classifyPath(sessionID, filePath)
+		read := fsutil.ReadRegular
+		if kind == agentTranscriptKind {
+			read = readRecords
+		}
+		data, err := read(current)
 		if err != nil {
 			return err
 		}
@@ -174,6 +180,57 @@ func readLocalFiles(folder, sessionID string) ([]sessionFile, error) {
 		return nil, fmt.Errorf("read session folder: %w", err)
 	}
 	return files, nil
+}
+
+// readRecords reads the complete records of a transcript. Claude Code only
+// appends to transcripts, so the complete records are a consistent snapshot
+// even while a Claude Code process is writing the file.
+func readRecords(path string) ([]byte, error) {
+	data, err := fsutil.ReadRegular(path)
+	if err != nil {
+		return nil, err
+	}
+	return completeRecords(data), nil
+}
+
+// withoutTurnInProgress returns the session as it was before its last prompt,
+// for a session whose turn is still running, together with the sub-agents
+// that the remaining transcript started.
+func (s claudeSession) withoutTurnInProgress() (claudeSession, error) {
+	transcript := s.files[0].data[:lastPromptOffset(s.files[0].data)]
+	files := []sessionFile{{path: s.files[0].path, data: transcript}}
+	for _, file := range s.files[1:] {
+		if file.agent == "" || startedIn(transcript, s.agentToolUse(file.agent)) {
+			files = append(files, sessionFile{path: file.path, data: file.data})
+		}
+	}
+	session, err := newSession(s.id, files)
+	if err != nil {
+		return claudeSession{}, fmt.Errorf("the session has no completed turn yet: %w", err)
+	}
+	return session, nil
+}
+
+// agentToolUse returns the ID of the tool call that started a sub-agent, as
+// its metadata records it, or "" when it records none.
+func (s claudeSession) agentToolUse(agent string) string {
+	for _, file := range s.files {
+		if file.kind == agentMetadataKind && file.agent == agent {
+			var metadata struct {
+				ToolUseID string `json:"toolUseId"`
+			}
+			if json.Unmarshal(file.data, &metadata) == nil {
+				return metadata.ToolUseID
+			}
+		}
+	}
+	return ""
+}
+
+// startedIn reports whether transcript holds the tool call toolUse; a
+// sub-agent without a recorded tool call is always kept.
+func startedIn(transcript []byte, toolUse string) bool {
+	return toolUse == "" || bytes.Contains(transcript, []byte(`"`+toolUse+`"`))
 }
 
 // readSession reads and validates a stored session.

@@ -1,5 +1,5 @@
-// Package fsutil reads and writes provider files durably: stable reads of files
-// another process may append to, exclusive creation, and atomic replacement.
+// Package fsutil reads and writes provider files durably: regular-file reads,
+// exclusive creation, and atomic replacement.
 package fsutil
 
 import (
@@ -13,27 +13,16 @@ import (
 // renamed into place.
 const StageSuffix = ".agent-teleport-stage"
 
-// ReadStable reads a regular file and fails when it changed during the read.
-func ReadStable(path string) ([]byte, error) {
-	before, err := os.Stat(path)
+// ReadRegular reads a regular file, refusing links and other file types.
+func ReadRegular(path string) ([]byte, error) {
+	info, err := os.Lstat(path)
 	if err != nil {
 		return nil, err
 	}
-	if !before.Mode().IsRegular() {
+	if !info.Mode().IsRegular() {
 		return nil, fmt.Errorf("%s is not a regular file", path)
 	}
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return nil, err
-	}
-	after, err := os.Stat(path)
-	if err != nil {
-		return nil, err
-	}
-	if before.Size() != after.Size() || !before.ModTime().Equal(after.ModTime()) {
-		return nil, fmt.Errorf("%s changed while it was being read", path)
-	}
-	return data, nil
+	return os.ReadFile(path)
 }
 
 // WriteExclusive creates path with data and syncs it, failing if path exists.

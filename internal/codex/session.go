@@ -132,16 +132,12 @@ func activeRolloutPath(home, name string) (string, error) {
 	return filepath.Join(home, "sessions", match[1], match[2], match[3], name), nil
 }
 
-// readSession reads the session whose root thread has a rollout at path, with
-// the threads it spawned and the ancestors they fork from. The root thread's
-// current object is determined from its local files, because Codex can report
-// the original rollout of a reverted thread.
-func (l layout) readSession(home, path string) (codexSession, error) {
-	reported, err := readRolloutFile(path)
-	if err != nil {
-		return codexSession{}, err
-	}
-	root, err := threadHead(home, reported.meta.ID)
+// readSession reads the session of the root thread, with the threads it
+// spawned and the ancestors they fork from, from the local rollout files. The
+// root thread's current object is determined from those files, because Codex
+// can report the original rollout of a reverted thread.
+func (l layout) readSession(home, thread string) (codexSession, error) {
+	root, err := threadHead(home, thread)
 	if err != nil {
 		return codexSession{}, err
 	}
@@ -185,6 +181,15 @@ func (l layout) readSession(home, path string) (codexSession, error) {
 		return nil
 	}
 	for _, head := range heads {
+		// A turn in progress, such as the one running agent-teleport, is left
+		// out, so the archive ends where the session can be resumed.
+		completed, err := l.withoutOpenTurn(head.data)
+		if err != nil {
+			return codexSession{}, fmt.Errorf("%s: %w", head.name, err)
+		}
+		if head, err = newRolloutFile(head.name, completed); err != nil {
+			return codexSession{}, fmt.Errorf("%s has no completed records yet: %w", head.name, err)
+		}
 		if err := collect(head, 0); err != nil {
 			return codexSession{}, err
 		}
@@ -218,11 +223,13 @@ func threadHead(home, thread string) (rolloutFile, error) {
 
 // readRolloutFile reads and parses the rollout object at path.
 func readRolloutFile(path string) (rolloutFile, error) {
-	data, err := readStable(path)
+	data, err := readRecords(path)
 	if err != nil {
 		return rolloutFile{}, err
 	}
-	return newRolloutFile(filepath.Base(path), data)
+	file, err := newRolloutFile(filepath.Base(path), data)
+	file.location = path
+	return file, err
 }
 
 // readObject reads the local rollout object that base references.

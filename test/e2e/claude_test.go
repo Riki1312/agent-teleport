@@ -71,10 +71,14 @@ func TestClaudeTwoHomeTransfer(t *testing.T) {
 	divergedPath := filepath.Join(work, "diverged.teleport")
 	runClaude(t, binary, source, nil, true, "export", "--all", sessionID, "-o", divergedPath)
 
-	// While Claude Code works on the session, it is neither exported nor
-	// changed, even with --replace.
+	// While Claude Code works on a turn, the session exports up to that turn's
+	// prompt and is never changed, even with --replace.
 	running := target.start(t, targetCWD, sessionID, "hold the session")
-	runClaude(t, binary, target, nil, false, "export", "--all", sessionID, "-o", filepath.Join(work, "busy.teleport"))
+	busyPath := filepath.Join(work, "busy.teleport")
+	runClaude(t, binary, target, nil, true, "export", "--all", sessionID, "-o", busyPath)
+	if transcript, _ := decodeArchive(t, busyPath).Data(sessionID + ".jsonl"); bytes.Contains(transcript, []byte("hold the session")) {
+		t.Fatal("the export of a busy session holds its turn in progress")
+	}
 	runClaude(t, binary, target, nil, false, "import", divergedPath, "--cwd", targetCWD, "--replace")
 	running.wait(t)
 
@@ -295,6 +299,18 @@ type scriptedAPI struct {
 	mu       sync.Mutex
 	requests []apiRequest
 	held     bool
+	// commands maps a prompt to a shell command Claude Code is asked to run.
+	commands map[string]string
+}
+
+// runOn makes Claude Code run command through its Bash tool for prompt.
+func (a *scriptedAPI) runOn(prompt, command string) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if a.commands == nil {
+		a.commands = map[string]string{}
+	}
+	a.commands[prompt] = command
 }
 
 // apiRequest is the part of a Messages API request the test inspects.
@@ -363,6 +379,9 @@ func (a *scriptedAPI) serve(writer http.ResponseWriter, request *http.Request) {
 	a.requests = append(a.requests, body)
 	index := len(a.requests)
 	blocks := body.reply(index)
+	if command, ok := a.commands[body.lastPrompt()]; ok && body.hasTool("Bash") {
+		blocks = []map[string]any{{"type": "tool_use", "id": fmt.Sprintf("toolu_%04d", index), "name": "Bash", "input": map[string]any{"command": command, "description": "run a command"}}}
+	}
 	if body.lastPrompt() == "hold the session" && blocks[len(blocks)-1]["type"] == "tool_use" {
 		a.held = true
 	}

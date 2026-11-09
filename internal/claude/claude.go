@@ -47,6 +47,17 @@ var Adapter = provider.Adapter{
 	Diagnose:        Diagnose,
 	ValidateArchive: ValidateArchive,
 	Relocate:        Relocate,
+	Current:         Current,
+}
+
+// sessionEnvironment names the variable through which Claude Code tells the
+// commands it runs which session they belong to.
+const sessionEnvironment = "CLAUDE_CODE_SESSION_ID"
+
+// Current returns the Claude Code session that runs this process.
+func Current() (string, bool) {
+	id := os.Getenv(sessionEnvironment)
+	return id, validSessionID(id)
 }
 
 // Store is the local Claude Code installation.
@@ -152,23 +163,26 @@ func (s *Store) sessionFolder(id string) (string, error) {
 }
 
 // Export snapshots a session into an archive stamped with createdAt: its
-// transcript, its sub-agent transcripts, and its saved tool outputs. It fails
-// while a Claude Code process is working on the session.
+// transcript, its sub-agent transcripts, and its saved tool outputs. While a
+// Claude Code process is working on a turn of the session, such as the one
+// running agent-teleport, the archive ends before that turn's prompt.
 func (s *Store) Export(id string, createdAt time.Time) (archive.Archive, error) {
 	folder, err := s.sessionFolder(id)
 	if err != nil {
 		return archive.Archive{}, err
+	}
+	session, err := readSession(folder, id)
+	if err != nil {
+		return archive.Archive{}, fmt.Errorf("snapshot session %s: %w", id, err)
 	}
 	live, open, err := sessionProcess(s.home, id)
 	if err != nil {
 		return archive.Archive{}, err
 	}
 	if open && live.Status != "idle" {
-		return archive.Archive{}, fmt.Errorf("session %s is %s in Claude Code (process %d); wait for its turn to finish", id, live.Status, live.PID)
-	}
-	session, err := readSession(folder, id)
-	if err != nil {
-		return archive.Archive{}, fmt.Errorf("snapshot session %s: %w", id, err)
+		if session, err = session.withoutTurnInProgress(); err != nil {
+			return archive.Archive{}, fmt.Errorf("snapshot session %s: %w", id, err)
+		}
 	}
 	if projectFolderName(session.info.workspace) != filepath.Base(folder) {
 		return archive.Archive{}, fmt.Errorf("session %s started in %s but is stored in project folder %s", id, session.info.workspace, filepath.Base(folder))

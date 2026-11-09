@@ -93,6 +93,33 @@ func parseTranscript(data []byte, sessionID, agentID string) (transcriptInfo, er
 	return info, nil
 }
 
+// lastPromptOffset returns the byte offset where the turn of the last prompt
+// a person sent in the main conversation starts: at the queue records that
+// enqueued the prompt, or at the prompt itself.
+func lastPromptOffset(data []byte) int {
+	last, offset, queued := 0, 0, -1
+	for line := range bytes.Lines(data) {
+		var entry record
+		_ = json.Unmarshal(line, &entry)
+		switch {
+		case entry.Type == "queue-operation":
+			if queued < 0 {
+				queued = offset
+			}
+		case entry.Type == "user" && !entry.IsMeta && !entry.IsSidechain && promptText(entry.Message) != "":
+			last = offset
+			if queued >= 0 {
+				last = queued
+			}
+			queued = -1
+		default:
+			queued = -1
+		}
+		offset += len(line)
+	}
+	return last
+}
+
 // completeRecords returns the prefix of data that ends with its last complete
 // record, so a transcript that Claude Code is appending to can be listed.
 func completeRecords(data []byte) []byte {

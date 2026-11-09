@@ -41,6 +41,18 @@ var Adapter = provider.Adapter{
 	Diagnose:        Diagnose,
 	ValidateArchive: ValidateArchive,
 	Relocate:        Relocate,
+	Current:         Current,
+}
+
+// sessionEnvironment names the variable through which Codex tells the commands
+// it runs which session they belong to; for a sub-agent's command it names the
+// session of the root thread.
+const sessionEnvironment = "CODEX_SESSION_ID"
+
+// Current returns the Codex session that runs this process.
+func Current() (string, bool) {
+	id := os.Getenv(sessionEnvironment)
+	return id, validSessionID(id)
 }
 
 // BinaryEnvironment names the variable that overrides the Codex binary path.
@@ -127,43 +139,41 @@ func newSession(thread appserver.Thread) provider.Session {
 	}
 }
 
-// Session returns a local session by its full ID. Codex lists a fork only
-// once it has turns of its own, so a session can exist without being listed.
+// Session returns a local session by its full ID, including a fork that Codex
+// does not list before it has turns of its own. It reads the session's
+// rollout files without starting App Server, which cannot run inside Codex's
+// sandbox, and titles the session with its first prompt.
 func (s *Store) Session(id string) (provider.Session, error) {
-	thread, err := s.thread(id)
+	if !validSessionID(id) {
+		return provider.Session{}, fmt.Errorf("invalid Codex session ID %q", id)
+	}
+	head, err := threadHead(s.home, id)
+	if err != nil {
+		return provider.Session{}, fmt.Errorf("read Codex session %s: %w", id, err)
+	}
+	info, err := os.Stat(head.location)
 	if err != nil {
 		return provider.Session{}, err
 	}
-	return newSession(thread), nil
+	return provider.Session{
+		Provider:  Provider,
+		ID:        id,
+		Title:     strings.Join(strings.Fields(firstPrompt(head.data)), " "),
+		Workspace: head.meta.CWD,
+		UpdatedAt: info.ModTime().UTC(),
+	}, nil
 }
 
-func (s *Store) thread(id string) (appserver.Thread, error) {
-	client, err := s.appServer()
-	if err != nil {
-		return appserver.Thread{}, err
-	}
-	thread, err := client.Read(id)
-	if err != nil {
-		return appserver.Thread{}, fmt.Errorf("read Codex session %s: %w", id, err)
-	}
-	return thread, nil
-}
-
-// Export snapshots a completed session into an archive stamped with createdAt.
-// A forked session carries the prefix of every ancestor rollout it extends. It
-// fails while the session has an active or incomplete turn.
+// Export snapshots a session into an archive stamped with createdAt, up to
+// its last completed turn: a turn in progress, in this or another Codex
+// process, is left out. A forked session carries the prefix of every ancestor
+// rollout it extends. Export reads rollout files only, so it also works when
+// Codex runs agent-teleport inside its sandbox.
 func (s *Store) Export(id string, createdAt time.Time) (archive.Archive, error) {
-	thread, err := s.thread(id)
-	if err != nil {
-		return archive.Archive{}, err
+	if !validSessionID(id) {
+		return archive.Archive{}, fmt.Errorf("invalid Codex session ID %q", id)
 	}
-	if !isQuiescent(thread.Status.Type) {
-		return archive.Archive{}, fmt.Errorf("session %s is not quiescent (status %q)", id, thread.Status.Type)
-	}
-	if thread.Path == "" {
-		return archive.Archive{}, fmt.Errorf("Codex did not report a rollout path for session %s", id)
-	}
-	exported, err := s.layout.readSession(s.home, thread.Path)
+	exported, err := s.layout.readSession(s.home, id)
 	if err != nil {
 		return archive.Archive{}, fmt.Errorf("snapshot session %s: %w", id, err)
 	}
@@ -236,15 +246,16 @@ func (s *Store) appServer() (*appserver.Client, error) {
 }
 
 // Relocate moves an archived session from the directory from, which contains
-// its workspace, to the directory to: every mention of a path inside from, in
-// every record, moves to the same path inside to. Codex records no paths into
-// its home, so home only replaces the manifest's.
+// its workspace, to the directory to, and from the archive's Codex home to
+// home: every mention of a path inside those directories, in every record,
+// moves to the same path inside the target. Codex records its home in the
+// instructions it sends, such as the location of skills.
 func Relocate(source archive.Archive, from, to, home string) (archive.Archive, error) {
 	sourceLayout, session, err := validateArchive(source)
 	if err != nil {
 		return archive.Archive{}, err
 	}
-	relocated, err := relocate(sourceLayout, session, from, to)
+	relocated, err := relocate(sourceLayout, session, pathmap.Move{From: from, To: to}, pathmap.Move{From: source.Manifest.Home, To: home})
 	if err != nil {
 		return archive.Archive{}, err
 	}
@@ -258,17 +269,19 @@ func Relocate(source archive.Archive, from, to, home string) (archive.Archive, e
 	}, relocated.payloads())
 }
 
-// relocate moves session from the directory from, which must contain its
-// workspace, to to.
-func relocate(sourceLayout layout, session codexSession, from, to string) (codexSession, error) {
-	workspace := session.head(session.root).meta.CWD
-	target, err := pathmap.Within(workspace, from, to)
+// relocate moves session from workspace.From, which must contain its
+// workspace, to workspace.To, and its Codex home from home.From to home.To.
+// A move between equal directories is skipped.
+func relocate(sourceLayout layout, session codexSession, workspace, home pathmap.Move) (codexSession, error) {
+	target, err := pathmap.Within(session.head(session.root).meta.CWD, workspace.From, workspace.To)
 	if err != nil {
 		return codexSession{}, err
 	}
 	var moves []pathmap.Move
-	if from != to {
-		moves = append(moves, pathmap.Move{From: from, To: to})
+	for _, move := range []pathmap.Move{workspace, home} {
+		if move.From != move.To {
+			moves = append(moves, move)
+		}
 	}
 	mapping, err := pathmap.New(moves...)
 	if err != nil {
@@ -305,13 +318,6 @@ func validateArchive(source archive.Archive) (layout, codexSession, error) {
 		return layout{}, codexSession{}, fmt.Errorf("manifest workspace %s does not match rollout %s", source.Manifest.Workspace, meta.CWD)
 	}
 	return sourceLayout, stored, nil
-}
-
-// isQuiescent reports whether an App Server status allows reading or replacing
-// a rollout. Another process's live session reports notLoaded, so callers also
-// require a completed final turn.
-func isQuiescent(status string) bool {
-	return status == "idle" || status == "notLoaded"
 }
 
 func codexHome() (string, error) {

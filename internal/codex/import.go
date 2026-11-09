@@ -11,6 +11,7 @@ import (
 	"github.com/Riki1312/agent-teleport/internal/archive"
 	"github.com/Riki1312/agent-teleport/internal/codex/appserver"
 	"github.com/Riki1312/agent-teleport/internal/fsutil"
+	"github.com/Riki1312/agent-teleport/internal/pathmap"
 	"github.com/Riki1312/agent-teleport/internal/provider"
 )
 
@@ -60,7 +61,9 @@ func (s *Store) prepareSession(source archive.Archive, workspace string) (codexS
 	if sourceLayout.minimum != s.layout.minimum {
 		return codexSession{}, fmt.Errorf("archive from Codex %s uses a rollout layout that Codex %s does not read", source.Manifest.ProviderVersion, s.version)
 	}
-	relocated, err := relocate(s.layout, imported, imported.head(imported.root).meta.CWD, workspace)
+	relocated, err := relocate(s.layout, imported,
+		pathmap.Move{From: imported.head(imported.root).meta.CWD, To: workspace},
+		pathmap.Move{From: source.Manifest.Home, To: s.home})
 	if err != nil {
 		return codexSession{}, err
 	}
@@ -737,4 +740,11 @@ func findThread(threads []appserver.Thread, id string) *appserver.Thread {
 		}
 	}
 	return nil
+}
+
+// isQuiescent reports whether an App Server status allows replacing a
+// rollout. Another process's live session reports notLoaded, so replacement
+// also requires the thread's writer lock.
+func isQuiescent(status string) bool {
+	return status == "idle" || status == "notLoaded"
 }

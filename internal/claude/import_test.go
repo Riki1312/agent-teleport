@@ -231,15 +231,63 @@ func TestValidateArchiveRejectsInconsistentArchives(t *testing.T) {
 	}
 }
 
+func TestExportOfABusySessionEndsBeforeTheTurnInProgress(t *testing.T) {
+	store := testStore(t)
+	toolUse := func(id, workspace string) string {
+		return `{"type":"assistant","message":{"role":"assistant","content":[{"type":"tool_use","id":"` + id + `"}]},"cwd":"` + workspace + `","sessionId":"` + testSessionID + `"}`
+	}
+	running := lines(message("one", sourceWorkspace), toolUse("toolu_spawn", sourceWorkspace), message("two", sourceWorkspace), toolUse("toolu_late", sourceWorkspace))
+	source, err := archive.New(archive.Header{
+		Provider: Provider, ProviderVersion: "2.1.319", SessionID: testSessionID,
+		Workspace: sourceWorkspace, Home: sourceHome, CreatedAt: time.Now(),
+	}, []archive.Payload{
+		{Path: testSessionID + ".jsonl", Data: running},
+		{Path: agentPath, Data: lines(agentMessage(sourceWorkspace))},
+		{Path: metadataPath, Data: []byte(`{"toolUseId":"toolu_spawn"}`)},
+		{Path: testSessionID + "/subagents/agent-a2.jsonl", Data: []byte(strings.ReplaceAll(string(lines(agentMessage(sourceWorkspace))), `"a1"`, `"a2"`))},
+		{Path: testSessionID + "/subagents/agent-a2.meta.json", Data: []byte(`{"toolUseId":"toolu_late"}`)},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	mustImport(t, store, source, "/target", false, provider.Imported)
+	registerAs(t, store.home, os.Getpid(), "busy")
+
+	// when
+	exported, err := store.Export(testSessionID, time.Now())
+
+	// then
+	if err != nil {
+		t.Fatal(err)
+	}
+	transcript, _ := exported.Data(testSessionID + ".jsonl")
+	if string(transcript) != string(lines(message("one", "/target"), toolUse("toolu_spawn", "/target"))) {
+		t.Fatalf("exported transcript =\n%s", transcript)
+	}
+	paths := make([]string, 0, len(exported.Payloads))
+	for _, payload := range exported.Payloads {
+		paths = append(paths, payload.Path)
+	}
+	if strings.Contains(strings.Join(paths, " "), "agent-a2") || !strings.Contains(strings.Join(paths, " "), "agent-a1") {
+		t.Fatalf("exported files = %v, want only the sub-agent of the completed turn", paths)
+	}
+}
+
 // register records pid in Claude Code's session registry as having the test
-// session open.
+// session open while idle.
 func register(t *testing.T, home string, pid int) {
+	t.Helper()
+	registerAs(t, home, pid, "idle")
+}
+
+// registerAs records pid in Claude Code's session registry with status.
+func registerAs(t *testing.T, home string, pid int, status string) {
 	t.Helper()
 	registry := filepath.Join(home, "sessions")
 	if err := os.MkdirAll(registry, 0o700); err != nil {
 		t.Fatal(err)
 	}
-	entry := fmt.Sprintf(`{"pid":%d,"sessionId":%q,"status":"idle"}`, pid, testSessionID)
+	entry := fmt.Sprintf(`{"pid":%d,"sessionId":%q,"status":%q}`, pid, testSessionID, status)
 	if err := os.WriteFile(filepath.Join(registry, fmt.Sprintf("%d.json", pid)), []byte(entry), 0o600); err != nil {
 		t.Fatal(err)
 	}

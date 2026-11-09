@@ -9,6 +9,9 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/Riki1312/agent-teleport/internal/claude"
+	"github.com/Riki1312/agent-teleport/internal/codex"
 )
 
 // TestClaudeRepositorySession saves a Claude Code session in a Git
@@ -48,6 +51,15 @@ func TestClaudeRepositorySession(t *testing.T) {
 	opened := target.request(t, clone, "--resume", sessionID, "continue in the clone")
 	opened.requireTexts(t, "spawning", "child result", "reply")
 	opened.requireMoved(t, clone, origin, source.home)
+
+	// Claude Code saves its own session; the save holds the session up to the
+	// turn that runs it.
+	api.runOn("save from inside", claude.BinaryEnvironment+"="+claudePath+" "+codex.BinaryEnvironment+"="+missingCommand+" "+binary+" save")
+	target.prompt(t, clone, sessionID, "save from inside")
+	insideSave, err := os.ReadFile(filepath.Join(clone, ".agent-teleport", "sessions", "spawn", sessionID+".jsonl"))
+	if err != nil || !bytes.Contains(insideSave, []byte("continue in the clone")) || bytes.Contains(insideSave, []byte("save from inside")) {
+		t.Fatalf("the save from inside the session holds the wrong turns: %v", err)
+	}
 
 	assertStates(t, atClone(true, "status", "--json"), map[string]string{"spawn": "local-ahead"})
 	assertOutput(t, atClone(true, "save", "--last"), "saved Claude Code session")
@@ -187,4 +199,45 @@ func assertStates(t *testing.T, output []byte, want map[string]string) {
 			t.Fatalf("status of %s = %q, want %q", name, got[name], state)
 		}
 	}
+}
+
+// TestCodexSaveFromInsideASession records a session with the native Codex CLI
+// against a scripted Responses API, has Codex run agent-teleport save inside
+// its workspace sandbox, and opens the saved session in a clone.
+func TestCodexSaveFromInsideASession(t *testing.T) {
+	binary := buildAgentTeleport(t)
+	codexPath := requireCodex(t, binary)
+	work := testWorkDir(t)
+	origin := initRepository(t, filepath.Join(work, "origin"))
+	api := startScriptedResponses(t, map[string]string{
+		"save this session": claude.BinaryEnvironment + "=" + missingCommand + " " + binary + " save --name native",
+	})
+	sourceHome := mkdir(t, filepath.Join(work, "source-home"))
+	api.configure(t, sourceHome)
+
+	sessionID := codexExec(t, codexPath, sourceHome, origin, "", "start the session")
+	codexExec(t, codexPath, sourceHome, origin, sessionID, "save this session")
+
+	// The save holds the session up to the turn that ran it.
+	saved := filepath.Join(origin, ".agent-teleport", "sessions", "native")
+	rollouts, err := filepath.Glob(filepath.Join(saved, "rollout-*.jsonl"))
+	if err != nil || len(rollouts) != 1 {
+		t.Fatalf("saved rollouts = %q, %v; tool output: %s", rollouts, err, api.toolOutputs())
+	}
+	if data, _ := os.ReadFile(rollouts[0]); fixtureTurns(data) != 1 {
+		t.Fatalf("saved session has %d turns, want the 1 completed before the save", fixtureTurns(data))
+	}
+	assertMentionsNone(t, saved, origin, sourceHome)
+	assertStates(t, runIn(t, binary, cleanEnvironment(sourceHome, codexPath), origin, nil, true, "status", "--json"), map[string]string{"native": "local-ahead"})
+
+	git(t, origin, "add", ".agent-teleport")
+	git(t, origin, "commit", "--quiet", "-m", "Save the session")
+	clone := filepath.Join(work, "clone")
+	git(t, work, "clone", "--quiet", origin, clone)
+	clone, _ = filepath.EvalSymlinks(clone)
+	// Codex resumes a session only with its model provider configured.
+	targetHome := mkdir(t, filepath.Join(work, "target-home"))
+	api.configure(t, targetHome)
+	assertOutput(t, runIn(t, binary, cleanEnvironment(targetHome, codexPath), clone, nil, true, "open", "native"), "imported Codex session")
+	assertResumed(t, codexPath, targetHome, sessionID, clone, 1)
 }

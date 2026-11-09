@@ -60,11 +60,11 @@ Each entry uses this shape:
 - `rationale`: Providers own their evolving schemas; a rollout-only import persisted and resumed correctly across App Server restarts, and Claude Code resumes any transcript it finds.
 - `impact`: Codex imports are verified through the provider's own listing, state, and read results; Claude Code imports by reading the placed files back, and by the two-home test.
 
-### Export only completed turns
+### Export the session up to the turn in progress
 
-- `decision`: Export requires an idle or unloaded thread, a stable read, and a rollout in which every started turn has completed or been aborted.
-- `rationale`: App Server reports sessions owned by another CLI process as unloaded, so runtime status alone cannot prove a turn is complete.
-- `impact`: Archives always end at a resumable turn boundary.
+- `decision`: Export reads the complete records of each file and leaves out a turn in progress instead of refusing the session: a Codex thread is cut before the `task_started` record of its open turn, and a Claude Code transcript that a live process is working on is cut before the queue records and prompt of its last turn, with the sub-agents that turn started. Inside an agent, `export` and `save` default to the current session, which Codex names in `CODEX_SESSION_ID` and Claude Code in `CLAUDE_CODE_SESSION_ID` for the commands they run. Codex export and session lookup read rollout files without App Server.
+- `rationale`: People decide to share a session while they are in it, and the agent's own tool call is always part of a turn in progress. Both providers only append to session files, so complete records are a consistent snapshot. Codex runs commands in a sandbox where App Server cannot write its state.
+- `impact`: Archives always end at a resumable turn boundary, and a session can save itself. A session whose first turn is still running cannot be exported yet. A Codex session looked up without App Server is titled by its first prompt, because thread names live only in Codex's database.
 
 ### Transfer whole Codex sessions
 
@@ -86,7 +86,7 @@ Each entry uses this shape:
 
 ### Coordinate with Claude Code through its session registry
 
-- `decision`: Refuse to export a session that a live process in Claude Code's `sessions/<pid>.json` registry reports as anything but idle, and refuse to change a session that a live process has open.
+- `decision`: Refuse to change a session that a live process in Claude Code's `sessions/<pid>.json` registry has open, and export a session that one reports as anything but idle only up to its turn in progress.
 - `rationale`: Claude Code takes no lock on transcripts; the registry is the only cross-process signal of an open session.
 - `impact`: The check is not atomic, so a Claude Code process that starts during an import is not detected. Platforms without a process check treat every registered process as alive.
 
@@ -124,7 +124,7 @@ Each entry uses this shape:
 
 ### Pin dependencies and tools
 
-- `decision`: Prefer the standard library. Pin the latest stable version of every dependency and tool, update them automatically, and use Bubble Tea v2 for the planned picker.
+- `decision`: Prefer the standard library. Pin the latest stable version of every dependency and tool, and update them automatically. There is no full-screen session picker; selection stays in the standard library.
 - `rationale`: Pinned versions keep builds reproducible; automated updates keep them current.
 - `impact`: The module requires Go 1.25 or newer; Dependabot updates Go modules and GitHub Actions.
 

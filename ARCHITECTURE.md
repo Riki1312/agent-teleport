@@ -17,7 +17,7 @@ Non-goals:
 
 - Transferring live processes, shell state, credentials, project files, uncommitted changes, or external service state.
 - Making models, MCP servers, plugins, or skills available on the destination machine.
-- Exporting a session while its agent is writing a turn.
+- Exporting the turn an agent is still working on.
 - Merging concurrent edits of one session made on different machines.
 - Renaming or cloning session identifiers, except through a provider's native fork.
 
@@ -29,23 +29,23 @@ A transfer is lossless with respect to the recorded provider event stream: an ar
 
 ```text
 agent-teleport list    [--all] [--json]
-agent-teleport export  (SESSION | --last) [--all] [-o PATH|-]
+agent-teleport export  [SESSION | --last] [--all] [-o PATH|-]
 agent-teleport import  (ARCHIVE | -) [--cwd PATH] [--replace] [--dry-run] [--resume]
 agent-teleport inspect (ARCHIVE | -) [--json]
-agent-teleport save    (SESSION | --last) [--all] [--name NAME] [--allow-secrets]
+agent-teleport save    [SESSION | --last] [--all] [--name NAME] [--allow-secrets]
 agent-teleport open    NAME [--replace] [--dry-run] [--resume]
 agent-teleport status  [--json]
 agent-teleport doctor  [--json]
 ```
 
 - `list` shows the sessions of the current directory, or of every directory with `--all`, newest first. `--json` is the stable automation interface.
-- `export` accepts a session ID, a unique ID prefix, or an exact title. Without `-o` it writes `<title>-<id>.teleport` to the current directory; `-o -` writes the archive to stdout and every diagnostic to stderr.
+- `export` accepts a session ID, a unique ID prefix, or an exact title; inside Codex or Claude Code, the current session is the default. A turn in progress is left out. Without `-o` it writes `<title>-<id>.teleport` to the current directory; `-o -` writes the archive to stdout and every diagnostic to stderr.
 - `import` maps the session to the current directory unless `--cwd` names another one. It prints the command that resumes the session, and runs it with `--resume`.
 - `inspect` validates an archive, describes its session, and reports whether it can be imported into the current directory. It never changes local state.
 - `save`, `open`, and `status` keep sessions in the current Git repository; see [Repository sessions](#repository-sessions).
 - `doctor` reports the detected agents, their versions, and whether they are supported.
 
-Usage errors exit with status 2 and other failures with status 1. An interactive session picker for `export` is planned; it will receive plain session values and never run when stdout is redirected or JSON is requested.
+Usage errors exit with status 2 and other failures with status 1.
 
 Direct transfer works over any pipe:
 
@@ -139,10 +139,10 @@ An archived Codex session therefore holds every object of the root thread and of
 
 ### Export
 
-1. Discover sessions through App Server `thread/list`, asking for every user-started source explicitly: App Server lists only interactive sources by default, which hides `codex exec` sessions. A scanning listing reports a reverted thread twice, so results are deduplicated, and each thread's current object is determined from its local files.
-2. Require an idle or unloaded thread. App Server cannot see turns running in another Codex process, so every turn started in a thread's history must also have ended, by completing or being aborted.
-3. Collect the session: the root thread's objects, every thread whose session ID names the root, and the objects their references lead to. Ancestors outside the session contribute only the referenced prefix.
-4. Read every file and fail if its size or modification time changed during the read. Validate identities, references at record boundaries, and turn boundaries across each thread's logical history.
+1. Discover sessions through App Server `thread/list`, asking for every user-started source and every model provider explicitly: App Server lists only interactive sources and the configured provider by default, which hides `codex exec` sessions and sessions of other providers. A scanning listing reports a reverted thread twice, so results are deduplicated.
+2. Collect the session from its rollout files, without App Server, which cannot write its state inside Codex's sandbox: the root thread's objects, every thread whose session ID names the root, and the objects their references lead to. Each thread's current object is determined from its local files, and ancestors outside the session contribute only the referenced prefix.
+3. Read the complete records of every file; Codex only appends, so they are a consistent snapshot while a process writes. Cut each thread's current object before the `task_started` record of a turn in progress, such as the turn running agent-teleport, so every remaining turn has completed or been aborted.
+4. Validate identities, references at record boundaries, and turn boundaries across each thread's logical history.
 5. Build the archive in memory, verify it, and write it.
 
 `export` accepts the full ID of a thread that Codex does not list, such as a fork without turns of its own. Exporting a sub-agent thread fails with the session to export instead.
@@ -188,8 +188,8 @@ Claude Code has no index and no server: it resumes a session by finding its tran
 ### Export
 
 1. List sessions from the transcripts of the workspace's project folder, or of every folder with `--all`, reading only complete records. A session's title is its custom title, else its generated title, else its first prompt.
-2. Refuse a session that a running Claude Code process reports as anything but idle.
-3. Read the transcript and every file of the session folder, failing if a file changed during the read or is not part of the known layout. Every record must belong to the session, and every sub-agent record to its agent.
+2. Read the complete records of the transcript and the sub-agent transcripts, and every other file of the session folder, failing on a file that is not part of the known layout. Every record must belong to the session, and every sub-agent record to its agent.
+3. When a running Claude Code process reports the session as anything but idle, cut the transcript before the queue records and prompt of its last turn, and leave out the sub-agents that turn started.
 4. Build the archive with the payload paths relative to the project folder. File history backups are project files and are not exported.
 
 ### Import

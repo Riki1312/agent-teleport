@@ -24,7 +24,9 @@
 
 ## Next work
 
-1. Add the interactive session picker for `export` and `save`.
+1. Ship agent integrations: a Claude Code plugin with a skill and the Codex equivalent, running `agent-teleport save` for the current session.
+2. Make selection forgiving: a numbered prompt when no session is named in a terminal, and title substrings as selectors.
+3. Add shell completion for session IDs and saved session names.
 
 ## Open questions
 
@@ -58,3 +60,12 @@
 - Every record but file-history records carries the session ID; sub-agent records also carry `agentId` and `isSidechain`. `--fork-session` writes a full copy under a new ID. `--resume-session-at <uuid>` creates a rewind branch non-interactively.
 - `sessions/<pid>.json` lists running processes with `sessionId` and `status` (`busy` during a turn) and disappears on exit.
 - Claude Code 2.1.317 through 2.1.319 write the same record and attachment types and session folder layout.
+
+## In-agent findings
+
+- Claude Code gives the commands it runs `CLAUDE_CODE_SESSION_ID`; Codex gives `CODEX_SESSION_ID`, `CODEX_THREAD_ID`, and `CODEX_HOME`.
+- Codex runs commands in a workspace-write sandbox by default, where App Server cannot write `CODEX_HOME` and exits; reading rollout files and writing the repository work.
+- Codex accepts a custom model provider with `wire_api = "responses"`, so a scripted local Responses API lets tests record native Codex sessions without credentials; Codex resumes a session only with its provider configured.
+- App Server `thread/list` lists only the configured model provider's threads unless `modelProviders` is an empty list.
+- Native Codex rollouts mention `CODEX_HOME`, for example in skills instructions, so relocation moves the Codex home as well as the workspace.
+- Claude Code writes `queue-operation` records with the prompt text before each prompt record.

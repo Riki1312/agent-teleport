@@ -31,12 +31,19 @@ func TestWriteAtomicReplacesContentAndDiscardsAStaleStage(t *testing.T) {
 	}
 }
 
-func TestReadStableRejectsDirectories(t *testing.T) {
-	// when
-	_, err := ReadStable(t.TempDir())
+func TestReadRegularRejectsLinksAndDirectories(t *testing.T) {
+	dir := t.TempDir()
+	link := filepath.Join(dir, "link")
+	if err := os.Symlink(dir, link); err != nil {
+		t.Fatal(err)
+	}
+	for _, path := range []string{dir, link} {
+		// when
+		_, err := ReadRegular(path)
 
-	// then
-	if err == nil {
-		t.Fatal("ReadStable() read a directory")
+		// then
+		if err == nil {
+			t.Fatalf("ReadRegular(%s) succeeded", path)
+		}
 	}
 }

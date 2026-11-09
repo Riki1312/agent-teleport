@@ -24,7 +24,7 @@ This repository contains `agent-teleport`, a Go CLI that moves resumable coding-
 
 - Follow [`CODE_PRINCIPLES.md`](CODE_PRINCIPLES.md) and [`ARCHITECTURE.md`](ARCHITECTURE.md); record intentional deviations.
 - Keep provider paths, schemas, event shapes, and version rules inside the provider adapter.
-- Keep the planned TUI a presentation layer over plain session values.
+- Keep interactive prompts a presentation layer over plain session values, never used when stdout is redirected or JSON is requested.
 - Prefer the standard library unless a dependency removes meaningful complexity. Pin the latest stable version of every dependency and tool.
 - Support Linux and macOS first. Keep path logic isolated and testable on Windows.
 - Document every exported identifier; lint enforces it.

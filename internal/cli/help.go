@@ -35,10 +35,11 @@ Options:
 const exportUsage = `Write a session to a .teleport archive.
 
 Usage:
-  agent-teleport export (SESSION | --last) [--all] [-o PATH|-]
+  agent-teleport export [SESSION | --last] [--all] [-o PATH|-]
 
-SESSION is a session ID, a unique ID prefix, or an exact session title.
-A session cannot be exported while its agent is working on a turn. A
+SESSION is a session ID, a unique ID prefix, or an exact session title;
+inside Codex or Claude Code, the current session is the default. A turn
+still in progress, such as the one running this command, is left out. A
 session carries its sub-agents, and a forked Codex session the part of
 each ancestor session it continues.
 
@@ -95,9 +96,10 @@ Options:
 const saveUsage = `Save a session in this Git repository, next to its code.
 
 Usage:
-  agent-teleport save (SESSION | --last) [--all] [--name NAME] [--allow-secrets]
+  agent-teleport save [SESSION | --last] [--all] [--name NAME] [--allow-secrets]
 
-The session is written to .agent-teleport/sessions/NAME/ with every path
+Inside Codex or Claude Code, the current session is the default, up to the
+turn that runs the command. The session is written to .agent-teleport/sessions/NAME/ with every path
 inside the repository made relative to it, together with the checked-out
 commit and branch. Commit the directory to share the session. Saving again
 updates the saved copy when the local session extends it; a newer saved

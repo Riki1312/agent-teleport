@@ -178,3 +178,16 @@ func TestLayoutForVersions(t *testing.T) {
 func lines(records ...string) []byte {
 	return []byte(strings.Join(records, "\n") + "\n")
 }
+
+func TestLastPromptOffsetIncludesTheQueueRecordsOfThePrompt(t *testing.T) {
+	first := string(lines(`{"type":"user","message":{"role":"user","content":"one"}}`, `{"type":"assistant","message":{"role":"assistant","content":[]}}`))
+	turn := string(lines(`{"type":"queue-operation","operation":"enqueue","content":"two"}`, `{"type":"queue-operation","operation":"dequeue"}`, `{"type":"user","message":{"role":"user","content":"two"}}`, `{"type":"user","message":{"role":"user","content":[{"type":"tool_result"}]}}`))
+
+	// when
+	offset := lastPromptOffset([]byte(first + turn))
+
+	// then
+	if offset != len(first) {
+		t.Fatalf("lastPromptOffset() = %d, want %d", offset, len(first))
+	}
+}

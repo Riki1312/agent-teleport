@@ -193,7 +193,7 @@ func (l layout) restoreRollback(destination, sessionID string, reset resetThread
 // readRolloutMeta reads the identity of the rollout at path. The history it
 // belongs to was validated before the transaction started.
 func readRolloutMeta(path string) (sessionMeta, error) {
-	data, err := readStable(path)
+	data, err := readRecords(path)
 	if err != nil {
 		return sessionMeta{}, err
 	}

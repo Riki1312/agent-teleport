@@ -34,11 +34,65 @@ type turnState struct {
 	completed int
 }
 
-// readStable reads a rollout and fails when the file changed during the read.
-func readStable(path string) ([]byte, error) {
-	data, err := fsutil.ReadStable(path)
+// readRecords reads the complete records of a rollout. Codex only appends to
+// rollouts, so the complete records are a consistent snapshot even while a
+// Codex process is writing the file.
+func readRecords(path string) ([]byte, error) {
+	data, err := fsutil.ReadRegular(path)
 	if err != nil {
 		return nil, fmt.Errorf("read rollout: %w", err)
+	}
+	return data[:bytes.LastIndexByte(data, '\n')+1], nil
+}
+
+// firstPrompt returns the first message a person sent in a rollout, skipping
+// the environment and instruction blocks that Codex sends as user messages.
+func firstPrompt(data []byte) string {
+	for line := range bytes.Lines(data) {
+		var record struct {
+			Type    string `json:"type"`
+			Payload struct {
+				Type    string `json:"type"`
+				Role    string `json:"role"`
+				Content []struct {
+					Type string `json:"type"`
+					Text string `json:"text"`
+				} `json:"content"`
+			} `json:"payload"`
+		}
+		if json.Unmarshal(line, &record) != nil || record.Type != "response_item" || record.Payload.Type != "message" || record.Payload.Role != "user" {
+			continue
+		}
+		for _, content := range record.Payload.Content {
+			text := strings.TrimSpace(content.Text)
+			if content.Type == "input_text" && text != "" && !strings.HasPrefix(text, "<") && !strings.HasPrefix(text, "# AGENTS.md instructions") {
+				return text
+			}
+		}
+	}
+	return ""
+}
+
+// withoutOpenTurn returns the prefix of a rollout before its turn in
+// progress, or the whole rollout when every started turn has ended.
+func (l layout) withoutOpenTurn(data []byte) ([]byte, error) {
+	open := false
+	start, offset := 0, 0
+	for line := range bytes.Lines(data) {
+		kind, err := classifyEvent(line)
+		if err != nil {
+			return nil, err
+		}
+		switch {
+		case kind == l.turnStarted && !open:
+			open, start = true, offset
+		case l.isTurnEnd(kind):
+			open = false
+		}
+		offset += len(line)
+	}
+	if open {
+		return data[:start], nil
 	}
 	return data, nil
 }

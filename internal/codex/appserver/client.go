@@ -122,17 +122,21 @@ type ListQuery struct {
 	SourceKinds []string
 }
 
-// List returns every thread that matches query, newest first.
+// List returns every thread that matches query, newest first, whatever model
+// provider it uses.
 func (c *Client) List(query ListQuery) ([]Thread, error) {
 	var result []Thread
 	var cursor any
 	for {
+		// An empty provider list includes threads of every model provider;
+		// App Server otherwise lists only the configured provider's threads.
 		params := map[string]any{
 			"cursor":         cursor,
 			"limit":          100,
 			"sortKey":        "updated_at",
 			"sortDirection":  "desc",
 			"useStateDbOnly": query.StateOnly,
+			"modelProviders": []string{},
 		}
 		if query.CWD != "" {
 			params["cwd"] = query.CWD

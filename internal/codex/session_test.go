@@ -6,6 +6,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/Riki1312/agent-teleport/internal/pathmap"
 )
 
 const (
@@ -91,11 +93,11 @@ func TestRemapSessionMovesReferencesAndRoundTrips(t *testing.T) {
 			}
 
 			// when
-			remapped, err := relocate(testLayout, original, "/workspace/source", "/target/a-longer-workspace")
+			remapped, err := relocate(testLayout, original, pathmap.Move{From: "/workspace/source", To: "/target/a-longer-workspace"}, pathmap.Move{})
 			if err != nil {
 				t.Fatal(err)
 			}
-			restored, err := relocate(testLayout, remapped, "/target/a-longer-workspace", "/workspace/source")
+			restored, err := relocate(testLayout, remapped, pathmap.Move{From: "/target/a-longer-workspace", To: "/workspace/source"}, pathmap.Move{})
 
 			// then
 			if err != nil {
@@ -119,16 +121,12 @@ func TestRemapSessionMovesReferencesAndRoundTrips(t *testing.T) {
 func TestReadSessionCollectsSnapshotsAndSpawnedThreads(t *testing.T) {
 	home := t.TempDir()
 	files := fixtureFiles(t, multiAgentOriginal, multiAgentSnapshot, multiAgentChild, parentFixture)
-	var snapshotPath string
 	for _, file := range files {
-		path := writeRollout(t, home, file.name, file.data)
-		if file.isSnapshot() {
-			snapshotPath = path
-		}
+		writeRollout(t, home, file.name, file.data)
 	}
 
 	// when
-	session, err := testLayout.readSession(home, snapshotPath)
+	session, err := testLayout.readSession(home, multiAgentRoot)
 
 	// then
 	if err != nil {
@@ -144,10 +142,10 @@ func TestReadSessionTakesTheReferencedAncestorPrefix(t *testing.T) {
 	files := fixtureFiles(t, parentFixture, forkFixture)
 	continuedParent := append(append([]byte{}, files[0].data...), files[0].data[bytes.IndexByte(files[0].data, '\n')+1:]...)
 	writeRollout(t, home, parentFixture, continuedParent)
-	forkPath := writeRollout(t, home, forkFixture, files[1].data)
+	writeRollout(t, home, forkFixture, files[1].data)
 
 	// when
-	session, err := testLayout.readSession(home, forkPath)
+	session, err := testLayout.readSession(home, files[1].meta.ID)
 
 	// then
 	if err != nil {
@@ -161,10 +159,10 @@ func TestReadSessionTakesTheReferencedAncestorPrefix(t *testing.T) {
 func TestReadSessionRejectsSpawnedThreads(t *testing.T) {
 	home := t.TempDir()
 	child := fixtureFiles(t, multiAgentChild)[0]
-	path := writeRollout(t, home, child.name, child.data)
+	writeRollout(t, home, child.name, child.data)
 
 	// when
-	_, err := testLayout.readSession(home, path)
+	_, err := testLayout.readSession(home, child.meta.ID)
 
 	// then
 	if err == nil || !strings.Contains(err.Error(), "export that session instead") {

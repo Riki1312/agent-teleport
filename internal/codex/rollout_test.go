@@ -8,6 +8,8 @@ import (
 	"slices"
 	"strings"
 	"testing"
+
+	"github.com/Riki1312/agent-teleport/internal/pathmap"
 )
 
 const testSessionID = "01999999-1111-7777-8888-222222222222"
@@ -43,11 +45,11 @@ func TestRelocateRoundTripsNativeFixture(t *testing.T) {
 	}
 
 	// when
-	relocated, err := relocate(testLayout, session, "/workspace/source", "/target/workspace-with-a-longer-name")
+	relocated, err := relocate(testLayout, session, pathmap.Move{From: "/workspace/source", To: "/target/workspace-with-a-longer-name"}, pathmap.Move{})
 	if err != nil {
 		t.Fatal(err)
 	}
-	restored, err := relocate(testLayout, relocated, "/target/workspace-with-a-longer-name", "/workspace/source")
+	restored, err := relocate(testLayout, relocated, pathmap.Move{From: "/target/workspace-with-a-longer-name", To: "/workspace/source"}, pathmap.Move{})
 
 	// then
 	if err != nil {
@@ -352,10 +354,56 @@ func relocateRollout(data []byte, target string) ([]byte, sessionMeta, error) {
 	if err != nil {
 		return nil, sessionMeta{}, err
 	}
-	relocated, err := relocate(testLayout, session, session.head(session.root).meta.CWD, target)
+	relocated, err := relocate(testLayout, session, pathmap.Move{From: session.head(session.root).meta.CWD, To: target}, pathmap.Move{})
 	if err != nil {
 		return nil, sessionMeta{}, err
 	}
 	root := relocated.head(relocated.root)
 	return root.data, root.meta, nil
+}
+
+func TestWithoutOpenTurnLeavesOutTheTurnInProgress(t *testing.T) {
+	completed := fixtureRollout("/source/workspace")
+	running := append(append([]byte{}, completed...), []byte(`{"type":"event_msg","payload":{"type":"task_started"}}`+"\n"+`{"type":"response_item","payload":{"type":"function_call"}}`+"\n")...)
+
+	// when
+	prefix, err := testLayout.withoutOpenTurn(running)
+
+	// then
+	if err != nil || !bytes.Equal(prefix, completed) {
+		t.Fatalf("withoutOpenTurn() = %q, %v", prefix, err)
+	}
+	if whole, _ := testLayout.withoutOpenTurn(completed); !bytes.Equal(whole, completed) {
+		t.Fatal("withoutOpenTurn() changed a rollout without an open turn")
+	}
+}
+
+func TestReadSessionExportsTheCompletedTurnsOfARunningSession(t *testing.T) {
+	completed := fixtureRollout("/source/workspace")
+	home := t.TempDir()
+	writeRollout(t, home, testRolloutName, append(append([]byte{}, completed...), []byte(`{"type":"event_msg","payload":{"type":"task_started"}}`+"\n"+`{"type":"event_msg","payload":{"type":"partial"`)...))
+
+	// when
+	session, err := testLayout.readSession(home, testSessionID)
+
+	// then
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(session.head(testSessionID).data, completed) {
+		t.Fatal("the export holds records of the turn in progress")
+	}
+}
+
+func TestFirstPromptSkipsContextBlocks(t *testing.T) {
+	message := func(role, text string) string {
+		return `{"type":"response_item","payload":{"type":"message","role":"` + role + `","content":[{"type":"input_text","text":"` + text + `"}]}}` + "\n"
+	}
+	rollout := []byte(message("developer", "be helpful") + message("user", "<environment_context>cwd</environment_context>") +
+		message("user", "# AGENTS.md instructions for /w") + message("user", "fix the build") + message("user", "later"))
+
+	// when, then
+	if prompt := firstPrompt(rollout); prompt != "fix the build" {
+		t.Fatalf("firstPrompt() = %q", prompt)
+	}
 }
