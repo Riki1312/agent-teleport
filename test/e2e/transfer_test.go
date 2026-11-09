@@ -117,6 +117,9 @@ func TestTwoHomeTransfer(t *testing.T) {
 	if resumed.CWD != replacementCWD {
 		t.Fatalf("resumed cwd = %q, want %q", resumed.CWD, replacementCWD)
 	}
+	if want := bytes.Count(fixture.Data, []byte(`"type":"task_started"`)); len(resumed.Turns) != want {
+		t.Fatalf("resumed session has %d turns, want %d", len(resumed.Turns), want)
+	}
 }
 
 func archiveSession(t *testing.T, codexPath, home, sessionID string) {

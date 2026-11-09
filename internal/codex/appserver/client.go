@@ -32,6 +32,10 @@ type Thread struct {
 	Status    struct {
 		Type string `json:"type"`
 	} `json:"status"`
+	// Turns is filled only for loaded threads, such as by Resume.
+	Turns []struct {
+		ID string `json:"id"`
+	} `json:"turns"`
 }
 
 // RPCError is an error response returned by the App Server.
