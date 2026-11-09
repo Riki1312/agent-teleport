@@ -1,0 +1,88 @@
+internal/claude/import_test.go
+  s_b3feabb7857cd3::t_9ae9ee63f14908 234-235,240-263,265-275,277,279-284,290
+  s_b3feabb7857cd3::t_ea9a44d507e528 236-239,264
+internal/codex/codex.go
+  s_b3feabb7857cd3::t_bf324159e9e4fa 44-55,167-169
+  s_b3feabb7857cd3::t_8055080945bed9 142-145,147-148,150,152,154,156,158-164,170-171,173-174,176
+  s_b3feabb7857cd3::t_ea2195ee4e19ed 249-252,258,272-276,281-284
+internal/codex/rollout_test.go
+  s_b3feabb7857cd3::t_57b6ebdbfe034a 397-409
+  s_b3feabb7857cd3::t_ddbb8ef98a32db 364-396
+  s_b3feabb7857cd3::t_ea2195ee4e19ed 11-12,48,52,357
+internal/cli/help.go
+  s_b3feabb7857cd3::t_eb58c7306e9d2b 38,40-42,99,101-102
+internal/codex/rollout.go
+  s_b3feabb7857cd3::t_2726d67f3284be 37-41,45-47,76-95
+  s_b3feabb7857cd3::t_9998678f6cf580 48-75
+internal/claude/transcript_test.go
+  s_b3feabb7857cd3::t_56f40746134fa0 181-193
+internal/codex/session_test.go
+  s_b3feabb7857cd3::t_ddbb8ef98a32db 125,129,145,148,162,165
+  s_b3feabb7857cd3::t_ea2195ee4e19ed 9-10,96,100
+test/e2e/repository_test.go
+  s_b3feabb7857cd3::t_56f40746134fa0 238,240
+  s_b3feabb7857cd3::t_c91e1f542beb5e 14,55-62
+  s_b3feabb7857cd3::t_fd1b5540511fe7 225
+  s_b3feabb7857cd3::t_000469eabe87a9 12-13,203-224,227-237,239,241-242
+internal/fsutil/fsutil_test.go
+  s_b3feabb7857cd3::t_4e746d9fbc034a 34-42,44-47
+internal/claude/transcript.go
+  s_b3feabb7857cd3::t_56f40746134fa0 96-98,100,103-109,111-116
+  s_b3feabb7857cd3::t_4e746d9fbc034a 99,101-102,110,117-122
+internal/codex/import.go
+  s_b3feabb7857cd3::t_ea2195ee4e19ed 14,64-66
+  s_b3feabb7857cd3::t_d1ff7237f3b6ee 744-750
+internal/claude/session.go
+  s_b3feabb7857cd3::t_4e746d9fbc034a 4,138,167-172,185-233
+ARCHITECTURE.md
+  s_b3feabb7857cd3::t_eb58c7306e9d2b 20,32,35,42,48,142-145,191-192
+internal/codex/replace.go
+  s_b3feabb7857cd3::t_2726d67f3284be 196
+test/e2e/codex_api_test.go
+  s_b3feabb7857cd3::t_1ae9c4f8bf5573 1-28,31-32,39-63,67-86,92-144
+  s_b3feabb7857cd3::t_fd1b5540511fe7 29-30,33-38,64-66,87-91
+internal/codex/session.go
+  s_b3feabb7857cd3::t_ddbb8ef98a32db 135-138
+  s_b3feabb7857cd3::t_2726d67f3284be 184-192,226
+  s_b3feabb7857cd3::t_8055080945bed9 139-140
+  s_b3feabb7857cd3::t_9998678f6cf580 230-232
+internal/fsutil/fsutil.go
+  s_b3feabb7857cd3::t_2726d67f3284be 16-18,22,25
+  s_b3feabb7857cd3::t_4e746d9fbc034a 1-2
+internal/claude/claude.go
+  s_b3feabb7857cd3::t_4e746d9fbc034a 166-168,174-177,183-185
+  s_b3feabb7857cd3::t_bf324159e9e4fa 50-60
+context/current.md
+  s_b3feabb7857cd3::t_eb58c7306e9d2b 63-71
+  s_b3feabb7857cd3::t_3f19a3d021e800 27-29
+context/decisions.md
+  s_b3feabb7857cd3::t_3f19a3d021e800 127
+  s_b3feabb7857cd3::t_eb58c7306e9d2b 63,65-67,89
+test/e2e/claude_test.go
+  s_b3feabb7857cd3::t_c91e1f542beb5e 302-313,382-384
+  s_b3feabb7857cd3::t_56f40746134fa0 80
+  s_b3feabb7857cd3::t_0fe2f1ed80cc61 74-75,77-79,81
+internal/codex/appserver/client.go
+  s_b3feabb7857cd3::t_ea2195ee4e19ed 125-126,131-132,139
+internal/provider/provider.go
+  s_b3feabb7857cd3::t_bf324159e9e4fa 39-41
+internal/cli/cli.go
+  s_b3feabb7857cd3::t_bf324159e9e4fa 551-553,571-572,574-576,588-590,601-621
+  s_b3feabb7857cd3::t_efbd4822e13023 558-559,591-600
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.2",
+  "base_commit_sha": "e32d285ff5181c22ad1f636629c22c181a580ad8",
+  "prompts": {},
+  "sessions": {
+    "s_b3feabb7857cd3": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "fd1b6ebe-1b52-4a20-8b44-740169df5be6",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Riccardo <riki.brero@gmail.com>"
+    }
+  }
+}
