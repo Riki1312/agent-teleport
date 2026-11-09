@@ -6,6 +6,7 @@ import (
 	"errors"
 	"slices"
 	"testing"
+	"time"
 )
 
 func TestParseAcceptsFlagsBetweenArguments(t *testing.T) {
@@ -56,8 +57,39 @@ func TestCommandHelpSucceeds(t *testing.T) {
 		err := app.Run(context.Background(), []string{command, "--help"})
 
 		// then
-		if err != nil || !bytes.HasPrefix(output.Bytes(), []byte("Usage:")) {
+		if err != nil || !bytes.Contains(output.Bytes(), []byte("Usage:")) {
 			t.Fatalf("%s --help = %q, %v", command, output, err)
 		}
+	}
+}
+
+func TestRelativeTime(t *testing.T) {
+	now := time.Date(2026, 11, 9, 12, 0, 0, 0, time.UTC)
+	for _, test := range []struct {
+		elapsed time.Duration
+		want    string
+	}{
+		{elapsed: 30 * time.Second, want: "just now"},
+		{elapsed: time.Minute, want: "1 minute ago"},
+		{elapsed: 5 * time.Hour, want: "5 hours ago"},
+		{elapsed: 3 * 24 * time.Hour, want: "3 days ago"},
+	} {
+		// when, then
+		if got := relativeTime(now, now.Add(-test.elapsed)); got != test.want {
+			t.Fatalf("relativeTime(%v) = %q, want %q", test.elapsed, got, test.want)
+		}
+	}
+}
+
+func TestVersionSucceeds(t *testing.T) {
+	output := &bytes.Buffer{}
+	app := &App{Stdout: output}
+
+	// when
+	err := app.Run(context.Background(), []string{"--version"})
+
+	// then
+	if err != nil || !bytes.HasPrefix(output.Bytes(), []byte("agent-teleport ")) {
+		t.Fatalf("--version = %q, %v", output, err)
 	}
 }

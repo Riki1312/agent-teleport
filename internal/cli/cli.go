@@ -17,6 +17,7 @@ import (
 	"unicode"
 
 	"github.com/Riki1312/agent-teleport/internal/archive"
+	"github.com/Riki1312/agent-teleport/internal/buildinfo"
 	"github.com/Riki1312/agent-teleport/internal/codex"
 )
 
@@ -43,11 +44,14 @@ func New() *App {
 // Run executes the command named by args[0].
 func (a *App) Run(ctx context.Context, args []string) error {
 	if len(args) == 0 {
-		return &UsageError{Message: usage}
+		return &UsageError{Message: "missing command\n\n" + usage}
 	}
 	switch args[0] {
 	case "help", "-h", "--help":
 		_, err := fmt.Fprint(a.Stdout, usage)
+		return err
+	case "version", "--version":
+		_, err := fmt.Fprintf(a.Stdout, "agent-teleport %s\n", buildinfo.Version())
 		return err
 	case "list":
 		return a.list(ctx, args[1:])
@@ -63,26 +67,6 @@ func (a *App) Run(ctx context.Context, args []string) error {
 		return &UsageError{Message: fmt.Sprintf("unknown command %q\n\n%s", args[0], usage)}
 	}
 }
-
-const usage = `Usage: agent-teleport <command> [options]
-
-Commands:
-  list       List Codex sessions
-  export     Export one session to a .teleport archive
-  inspect    Validate and describe an archive
-  import     Import an archive into the local Codex store
-  doctor     Check local Codex compatibility
-
-Run "agent-teleport <command> --help" for command options.
-`
-
-const (
-	listUsage    = "Usage: agent-teleport list [--all] [--json]\n"
-	exportUsage  = "Usage: agent-teleport export [SESSION] [--all] [--last] [-o PATH|-]\n"
-	inspectUsage = "Usage: agent-teleport inspect <ARCHIVE|-> [--json]\n"
-	importUsage  = "Usage: agent-teleport import <ARCHIVE|-> [--cwd PATH] [--replace] [--dry-run] [--resume]\n"
-	doctorUsage  = "Usage: agent-teleport doctor [--json]\n"
-)
 
 // errHelp reports that a command printed its help and should succeed.
 var errHelp = errors.New("help requested")
@@ -126,13 +110,26 @@ func (a *App) list(ctx context.Context, args []string) error {
 		}
 		return writeJSON(a.Stdout, entries)
 	}
-	writer := tabwriter.NewWriter(a.Stdout, 0, 4, 2, ' ', 0)
-	if _, err := fmt.Fprintln(writer, "UPDATED\tID\tWORKSPACE\tTITLE"); err != nil {
+	if len(sessions) == 0 {
+		_, err := fmt.Fprintln(a.Stderr, "no sessions found; use --all to include other directories")
 		return err
 	}
+	writer := tabwriter.NewWriter(a.Stdout, 0, 4, 2, ' ', 0)
+	header := "UPDATED\tPROVIDER\tID\tTITLE"
+	if *includeAll {
+		header = "UPDATED\tPROVIDER\tID\tWORKSPACE\tTITLE"
+	}
+	if _, err := fmt.Fprintln(writer, header); err != nil {
+		return err
+	}
+	now := a.Now()
 	for _, session := range sessions {
-		updated := session.UpdatedAt.Format(time.RFC3339)
-		if _, err := fmt.Fprintf(writer, "%s\t%s\t%s\t%s\n", updated, session.ID, session.Workspace, shorten(session.Title)); err != nil {
+		columns := []string{relativeTime(now, session.UpdatedAt), providerName, shortID(session.ID)}
+		if *includeAll {
+			columns = append(columns, session.Workspace)
+		}
+		columns = append(columns, shorten(session.Title))
+		if _, err := fmt.Fprintln(writer, strings.Join(columns, "\t")); err != nil {
 			return err
 		}
 	}
@@ -154,7 +151,7 @@ func (a *App) export(ctx context.Context, args []string) error {
 	}
 	selector := strings.Join(positional, "")
 	if selector == "" && !*last {
-		return &UsageError{Message: "export requires SESSION or --last (interactive picker is not implemented yet)"}
+		return &UsageError{Message: "export needs a SESSION or --last\n\n" + exportUsage}
 	}
 	if selector != "" && *last {
 		return &UsageError{Message: "SESSION and --last cannot be used together"}
@@ -185,7 +182,7 @@ func (a *App) export(ctx context.Context, args []string) error {
 		if _, err := a.Stdout.Write(encoded); err != nil {
 			return fmt.Errorf("write archive to stdout: %w", err)
 		}
-		_, err = fmt.Fprintf(a.Stderr, "exported %s\n", session.ID)
+		_, err = fmt.Fprintf(a.Stderr, "exported Codex session %s\n", session.ID)
 		return err
 	}
 	path := *output
@@ -195,7 +192,7 @@ func (a *App) export(ctx context.Context, args []string) error {
 	if err := exported.WriteFile(path); err != nil {
 		return err
 	}
-	_, err = fmt.Fprintf(a.Stdout, "exported %s to %s\n", session.ID, path)
+	_, err = fmt.Fprintf(a.Stdout, "exported Codex session %s to %s\n", session.ID, path)
 	return err
 }
 
@@ -367,11 +364,18 @@ func (a *App) doctor(ctx context.Context, args []string) error {
 	if *asJSON {
 		return writeJSON(a.Stdout, report)
 	}
-	_, err = fmt.Fprintf(a.Stdout, "Codex home: %s\nCodex version: %s\nSupported: %t (supported versions: %s)\nApp Server: %t\n",
-		report.CodexHome, report.CodexVersion, report.Supported, strings.Join(report.SupportedVersions, ", "), report.AppServer)
-	if err == nil && report.Error != "" {
-		_, err = fmt.Fprintf(a.Stdout, "Error: %s\n", report.Error)
+	status := "ready"
+	switch {
+	case report.Error != "":
+		status = "error: " + report.Error
+	case !report.Supported:
+		status = "unsupported version; supported: " + strings.Join(report.SupportedVersions, ", ")
 	}
+	version := report.CodexVersion
+	if version == "" {
+		version = "not detected"
+	}
+	_, err = fmt.Fprintf(a.Stdout, "Codex\n  version: %s\n  home:    %s\n  status:  %s\n", version, report.CodexHome, status)
 	return err
 }
 
@@ -449,6 +453,42 @@ func selectSession(sessions []codex.Session, selector string, last bool) (codex.
 	return matches[0], nil
 }
 
+// providerName is the short provider name shown in tables.
+const providerName = "codex"
+
+// shortID returns the leading part of a session ID, which export accepts as a
+// selector while it is unique.
+func shortID(id string) string {
+	if len(id) > 8 {
+		return id[:8]
+	}
+	return id
+}
+
+// relativeTime describes t relative to now for human-readable tables.
+func relativeTime(now, t time.Time) string {
+	elapsed := now.Sub(t)
+	switch {
+	case elapsed < time.Minute:
+		return "just now"
+	case elapsed < time.Hour:
+		return plural(int(elapsed/time.Minute), "minute") + " ago"
+	case elapsed < 24*time.Hour:
+		return plural(int(elapsed/time.Hour), "hour") + " ago"
+	case elapsed < 30*24*time.Hour:
+		return plural(int(elapsed/(24*time.Hour)), "day") + " ago"
+	default:
+		return t.Local().Format(time.DateOnly)
+	}
+}
+
+func plural(count int, unit string) string {
+	if count == 1 {
+		return "1 " + unit
+	}
+	return fmt.Sprintf("%d %ss", count, unit)
+}
+
 // shorten limits a title to one table cell.
 func shorten(title string) string {
 	runes := []rune(title)
@@ -477,11 +517,7 @@ func defaultArchiveName(session codex.Session) string {
 	if base == "" {
 		base = "session"
 	}
-	shortID := session.ID
-	if len(shortID) > 8 {
-		shortID = shortID[:8]
-	}
-	return fmt.Sprintf("%s-%s%s", base, shortID, archive.Extension)
+	return fmt.Sprintf("%s-%s%s", base, shortID(session.ID), archive.Extension)
 }
 
 // readArchive decodes an archive from path, or from stdin when path is "-".
