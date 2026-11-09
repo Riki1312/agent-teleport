@@ -1,0 +1,28 @@
+test/e2e/transfer_test.go
+  s_b3feabb7857cd3::t_e537492315fb3d 58-64,67-74,76-78,86-87,103,159,172-221
+internal/cli/cli.go
+  s_b3feabb7857cd3::t_0d7ef069e4411f 83,258,265,272,279-281,288,292,295-296,298,312-313,315
+  s_b3feabb7857cd3::t_8630561931955c 314,316,318-334
+internal/cli/cli_test.go
+  s_b3feabb7857cd3::t_0d7ef069e4411f 32
+internal/codex/import.go
+  s_b3feabb7857cd3::t_8d85b3b9cbb25a 4,19-22,31-37,49-50,53,57-73,75,79,81,83-87,89,92-98,100,102-103,105-107,109-110,112-116,119-121,123,125-126,128-131,133,135-136,138-144,146-149,152-172,174,176-188,190-195,198,202,205,207-208,210-218,221-222,227
+internal/codex/import_test.go
+  s_b3feabb7857cd3::t_0d7ef069e4411f 1-26
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.2",
+  "base_commit_sha": "0e9435038398dd0f8acc125f8e93d84d89889059",
+  "prompts": {},
+  "sessions": {
+    "s_b3feabb7857cd3": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "fd1b6ebe-1b52-4a20-8b44-740169df5be6",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Riccardo <riki.brero@gmail.com>"
+    }
+  }
+}
