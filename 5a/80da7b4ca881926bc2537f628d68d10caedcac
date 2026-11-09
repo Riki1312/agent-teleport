@@ -1,0 +1,28 @@
+internal/cli/cli.go
+  s_b3feabb7857cd3::t_5b5b2656c83345 20,53-55,113-116,118-122,125,127-132,154,185,195,367-376,378,456-491,520
+  ai_agent 47
+internal/cli/cli_test.go
+  s_b3feabb7857cd3::t_5f2370a3d9f67f 9,60,65-93
+internal/cli/help.go
+  s_b3feabb7857cd3::t_5b5b2656c83345 1-87
+internal/buildinfo/buildinfo.go
+  s_b3feabb7857cd3::t_5b5b2656c83345 1-26
+internal/codex/appserver/client.go
+  s_b3feabb7857cd3::t_5f2370a3d9f67f 15-16,198
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.2",
+  "base_commit_sha": "5a80da7b4ca881926bc2537f628d68d10caedcac",
+  "prompts": {},
+  "sessions": {
+    "s_b3feabb7857cd3": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "fd1b6ebe-1b52-4a20-8b44-740169df5be6",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Riccardo <riki.brero@gmail.com>"
+    }
+  }
+}
