@@ -1,0 +1,28 @@
+internal/cli/cli.go
+  s_b3feabb7857cd3::t_103672122a8423 341,357,370-372,374-379,405,415,418-419
+  s_b3feabb7857cd3::t_85bd88d70bd7fd 355,359,367-368,413,417,426-428,436-442
+internal/appserver/client.go
+  s_b3feabb7857cd3::t_1e15f7fe0263d2 167-171
+internal/codex/codex_test.go
+  s_b3feabb7857cd3::t_1e15f7fe0263d2 6,8,159-195
+internal/codex/codex.go
+  s_b3feabb7857cd3::t_103672122a8423 8,209-232
+test/e2e/transfer_test.go
+  s_b3feabb7857cd3::t_1e15f7fe0263d2 86-97,112-120
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.2",
+  "base_commit_sha": "abf57360ea1c0321f62b33845bf9fdcf5379c902",
+  "prompts": {},
+  "sessions": {
+    "s_b3feabb7857cd3": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "fd1b6ebe-1b52-4a20-8b44-740169df5be6",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Riccardo <riki.brero@gmail.com>"
+    }
+  }
+}
