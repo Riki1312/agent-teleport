@@ -14,7 +14,8 @@ import (
 
 // ImportRequest describes one archive import.
 type ImportRequest struct {
-	Archive   archive.Archive
+	Archive archive.Archive
+	// Workspace is the canonical absolute directory the session is mapped to.
 	Workspace string
 	// Replace allows overwriting a local copy that has diverged from the
 	// archive, or that belongs to another workspace.
@@ -239,12 +240,16 @@ func (s *Store) placeRollout(destination string, rollout []byte) error {
 	if err := writeExclusive(stage, rollout); err != nil {
 		return fmt.Errorf("stage rollout: %w", err)
 	}
-	defer os.Remove(stage)
-	if err := os.Link(stage, destination); err != nil {
-		if errors.Is(err, os.ErrExist) {
-			return fmt.Errorf("rollout destination already exists: %s", destination)
-		}
-		return fmt.Errorf("place rollout: %w", err)
+	linkErr := os.Link(stage, destination)
+	removeErr := os.Remove(stage)
+	if errors.Is(linkErr, os.ErrExist) {
+		return fmt.Errorf("rollout destination already exists: %s", destination)
+	}
+	if linkErr != nil {
+		return fmt.Errorf("place rollout: %w", linkErr)
+	}
+	if removeErr != nil {
+		return fmt.Errorf("remove rollout stage: %w", removeErr)
 	}
 	return syncDirectory(directory)
 }

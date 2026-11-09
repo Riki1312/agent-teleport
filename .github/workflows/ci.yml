@@ -22,6 +22,17 @@ jobs:
           node-version: lts/*
       - run: npx --yes prettier@${PRETTIER_VERSION} --check "**/*.md"
 
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version: stable
+      - uses: golangci/golangci-lint-action@v9
+        with:
+          version: v2.15.0
+
   test:
     strategy:
       fail-fast: false
@@ -37,8 +48,6 @@ jobs:
         with:
           node-version: lts/*
       - run: npm install --global @openai/codex@${CODEX_VERSION}
-      - run: test -z "$(gofmt -l .)"
-      - run: go vet ./...
       - run: go test -count=1 ./...
         env:
           AGENT_TELEPORT_E2E_REQUIRED: "1"

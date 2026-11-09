@@ -43,7 +43,8 @@ type Store struct {
 
 // Session summarizes a local Codex session.
 type Session struct {
-	ID        string
+	ID string
+	// Title is the session's name, or Codex's preview of its first message.
 	Title     string
 	Workspace string
 	UpdatedAt time.Time
@@ -58,8 +59,10 @@ type Diagnosis struct {
 	Version           string
 	Supported         bool
 	SupportedVersions []string
-	AppServerError    error
-	DetectionError    error
+	// DetectionError reports why the Codex home or version could not be found.
+	DetectionError error
+	// AppServerError reports why App Server could not start or list threads.
+	AppServerError error
 }
 
 // Open detects the local Codex installation and requires a supported version.
@@ -84,11 +87,6 @@ func Open(ctx context.Context) (*Store, error) {
 func (s *Store) Close() {
 	s.client.Close()
 	s.client = nil
-}
-
-// Version returns the installed Codex version.
-func (s *Store) Version() string {
-	return s.version
 }
 
 // Sessions lists local sessions, most recently updated first. An empty
@@ -120,9 +118,9 @@ func (s *Store) Sessions(workspace string) ([]Session, error) {
 	return sessions, nil
 }
 
-// Export snapshots a completed session into an archive created at now. It
-// fails while the session has an active or incomplete turn.
-func (s *Store) Export(session Session, now time.Time) (archive.Archive, error) {
+// Export snapshots a completed session into an archive stamped with createdAt.
+// It fails while the session has an active or incomplete turn.
+func (s *Store) Export(session Session, createdAt time.Time) (archive.Archive, error) {
 	if !isQuiescent(session.status) {
 		return archive.Archive{}, fmt.Errorf("session %s is not quiescent (status %q)", session.ID, session.status)
 	}
@@ -141,7 +139,7 @@ func (s *Store) Export(session Session, now time.Time) (archive.Archive, error) 
 		ProviderVersion: s.version,
 		SessionID:       meta.ID,
 		Workspace:       meta.CWD,
-		CreatedAt:       now,
+		CreatedAt:       createdAt,
 	}, []archive.Payload{{Path: rolloutPayload, Data: rollout}})
 }
 
@@ -203,7 +201,7 @@ func validateArchive(source archive.Archive) (layout, []byte, error) {
 	if len(source.Manifest.Files) != 1 {
 		return layout{}, nil, errors.New("Codex archive must contain exactly one rollout")
 	}
-	rollout, ok := source.Payload(rolloutPayload)
+	rollout, ok := source.Data(rolloutPayload)
 	if !ok {
 		return layout{}, nil, fmt.Errorf("Codex archive is missing %s", rolloutPayload)
 	}

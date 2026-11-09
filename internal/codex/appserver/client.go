@@ -23,15 +23,13 @@ const (
 
 // Thread is the subset of an App Server thread that agent-teleport uses.
 type Thread struct {
-	ID         string `json:"id"`
-	CWD        string `json:"cwd"`
-	Name       string `json:"name"`
-	Preview    string `json:"preview"`
-	Path       string `json:"path"`
-	CLIVersion string `json:"cliVersion"`
-	CreatedAt  int64  `json:"createdAt"`
-	UpdatedAt  int64  `json:"updatedAt"`
-	Status     struct {
+	ID        string `json:"id"`
+	CWD       string `json:"cwd"`
+	Name      string `json:"name"`
+	Preview   string `json:"preview"`
+	Path      string `json:"path"`
+	UpdatedAt int64  `json:"updatedAt"`
+	Status    struct {
 		Type string `json:"type"`
 	} `json:"status"`
 }
@@ -64,10 +62,10 @@ type Client struct {
 	closed  bool
 }
 
-// Start launches the App Server for codexHome and completes its initialization
-// handshake. The process stops when ctx is canceled or Close is called.
-func Start(ctx context.Context, codexPath, codexHome string) (*Client, error) {
-	command := exec.CommandContext(ctx, codexPath, "app-server", "--stdio")
+// Start launches the App Server of the Codex binary for codexHome and completes
+// its initialization handshake. The process stops when ctx is canceled or Close is called.
+func Start(ctx context.Context, binary, codexHome string) (*Client, error) {
+	command := exec.CommandContext(ctx, binary, "app-server", "--stdio")
 	command.Env = withCodexHome(os.Environ(), codexHome)
 
 	stdin, err := command.StdinPipe()

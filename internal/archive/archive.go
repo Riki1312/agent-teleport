@@ -108,8 +108,8 @@ func New(header Header, payloads []Payload) (Archive, error) {
 	return Archive{Manifest: manifest, Payloads: payloads}, nil
 }
 
-// Payload returns the content of the payload file at path.
-func (a Archive) Payload(path string) ([]byte, bool) {
+// Data returns the content of the payload file at path.
+func (a Archive) Data(path string) ([]byte, bool) {
 	for _, payload := range a.Payloads {
 		if payload.Path == path {
 			return payload.Data, true
@@ -197,7 +197,7 @@ func Decode(input io.Reader) (Archive, error) {
 	if err != nil {
 		return Archive{}, fmt.Errorf("open gzip archive: %w", err)
 	}
-	defer gzipReader.Close()
+	defer func() { _ = gzipReader.Close() }()
 	tarReader := tar.NewReader(gzipReader)
 
 	manifestJSON, err := readEntry(tarReader, manifestPath, maxManifestSize)

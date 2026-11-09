@@ -224,15 +224,14 @@ func writeExclusive(path string, data []byte) error {
 	if err != nil {
 		return err
 	}
-	if _, err := file.Write(data); err != nil {
-		file.Close()
-		return err
+	_, err = file.Write(data)
+	if err == nil {
+		err = file.Sync()
 	}
-	if err := file.Sync(); err != nil {
-		file.Close()
-		return err
+	if closeErr := file.Close(); err == nil {
+		err = closeErr
 	}
-	return file.Close()
+	return err
 }
 
 func syncDirectory(path string) error {
@@ -240,8 +239,11 @@ func syncDirectory(path string) error {
 	if err != nil {
 		return err
 	}
-	defer directory.Close()
-	return directory.Sync()
+	syncErr := directory.Sync()
+	if closeErr := directory.Close(); syncErr == nil {
+		syncErr = closeErr
+	}
+	return syncErr
 }
 
 func removeIfExists(path string) error {

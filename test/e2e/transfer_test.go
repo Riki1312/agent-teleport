@@ -46,11 +46,11 @@ func TestTwoHomeTransfer(t *testing.T) {
 		t.Fatal(err)
 	}
 	exportedArchive, err := archive.Decode(archiveFile)
-	archiveFile.Close()
+	_ = archiveFile.Close()
 	if err != nil {
 		t.Fatal(err)
 	}
-	if rollout, _ := exportedArchive.Payload("rollout.jsonl"); !bytes.Equal(rollout, fixture.Data) {
+	if rollout, _ := exportedArchive.Data("rollout.jsonl"); !bytes.Equal(rollout, fixture.Data) {
 		t.Fatal("export did not preserve the stored rollout bytes")
 	}
 	run(t, binary, codexPath, sourceHome, nil, true, "inspect", archivePath, "--json")

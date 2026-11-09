@@ -534,7 +534,7 @@ func (a *App) readArchive(path string) (archive.Archive, error) {
 	if err != nil {
 		return archive.Archive{}, fmt.Errorf("open archive: %w", err)
 	}
-	defer file.Close()
+	defer func() { _ = file.Close() }()
 	decoded, err := archive.Decode(file)
 	if err != nil {
 		return archive.Archive{}, fmt.Errorf("read archive: %w", err)

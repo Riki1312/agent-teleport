@@ -3,8 +3,8 @@ package buildinfo
 
 import "runtime/debug"
 
-// Version returns the module version of a released build, or "devel" with the
-// VCS revision of a local build.
+// Version returns the module version stamped into the build, or "devel" with
+// the VCS revision when the build has no module version.
 func Version() string {
 	info, ok := debug.ReadBuildInfo()
 	if !ok {

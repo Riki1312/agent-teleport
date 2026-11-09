@@ -1,3 +1,5 @@
+// Command agent-teleport moves resumable coding-agent sessions between
+// machines.
 package main
 
 import (

@@ -31,7 +31,7 @@ func TestEncodeDecodeRoundTrip(t *testing.T) {
 		t.Fatalf("manifest changed: %#v", decoded.Manifest)
 	}
 	for _, payload := range original.Payloads {
-		data, ok := decoded.Payload(payload.Path)
+		data, ok := decoded.Data(payload.Path)
 		if !ok || !bytes.Equal(data, payload.Data) {
 			t.Fatalf("payload %s changed", payload.Path)
 		}
