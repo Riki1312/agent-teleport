@@ -165,3 +165,12 @@ func assertMissing(t *testing.T, path string) {
 		t.Fatalf("expected %s to be absent, got %v", path, err)
 	}
 }
+
+// interruptionError simulates a process exit at a replacement checkpoint.
+type interruptionError struct {
+	phase replacePhase
+}
+
+func (e *interruptionError) Error() string {
+	return "simulated interruption after " + string(e.phase)
+}

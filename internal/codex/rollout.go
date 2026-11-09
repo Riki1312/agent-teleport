@@ -268,7 +268,7 @@ func findSession(home, sessionID string) (storedSession, error) {
 				found.pending = appendUnique(found.pending, strings.TrimSuffix(path, rollbackSuffix))
 			case strings.HasSuffix(name, suffix+stageSuffix):
 				found.pending = appendUnique(found.pending, strings.TrimSuffix(path, stageSuffix))
-			case strings.HasSuffix(name, appendSuffix):
+			case strings.HasSuffix(name, appendSuffix) && isSessionRollout(strings.TrimSuffix(name, appendSuffix), suffix, snapshotPrefix):
 				found.appending = appendUnique(found.appending, strings.TrimSuffix(path, appendSuffix))
 			case strings.Contains(name, snapshotPrefix) && strings.HasSuffix(name, ".jsonl"):
 				found.snapshots = append(found.snapshots, path)
@@ -280,6 +280,13 @@ func findSession(home, sessionID string) (storedSession, error) {
 		}
 	}
 	return found, nil
+}
+
+// isSessionRollout reports whether a rollout file name is the original rollout
+// or a snapshot of the thread whose names end with suffix or contain
+// snapshotPrefix.
+func isSessionRollout(name, suffix, snapshotPrefix string) bool {
+	return strings.HasSuffix(name, suffix) || (strings.Contains(name, snapshotPrefix) && strings.HasSuffix(name, ".jsonl"))
 }
 
 func appendUnique(values []string, value string) []string {

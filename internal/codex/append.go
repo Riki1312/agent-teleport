@@ -18,11 +18,12 @@ const appendSuffix = ".agent-teleport-append"
 // errSessionOpen reports that a Codex process has a thread loaded.
 var errSessionOpen = errors.New("the session is open in Codex; close it and retry")
 
-// appendRecords appends complete records to the rollout of thread at path.
-// Codex picks up appended records when it next loads the thread. The thread's
-// writer lock is held so that no Codex process writes concurrently, and a
-// marker records the original and final sizes until the append is durable.
-func appendRecords(home, thread, path string, records []byte) error {
+// appendRecords appends complete records to the rollout of thread at path,
+// which must still have the size the append was planned against. Codex picks
+// up appended records when it next loads the thread. The thread's writer lock
+// is held so that no Codex process writes concurrently, and a marker records
+// the original and final sizes until the append is durable.
+func appendRecords(home, thread, path string, size int64, records []byte) error {
 	unlock, err := lockThread(home, thread)
 	if err != nil {
 		return err
@@ -31,6 +32,9 @@ func appendRecords(home, thread, path string, records []byte) error {
 	info, err := os.Stat(path)
 	if err != nil {
 		return fmt.Errorf("stat rollout: %w", err)
+	}
+	if info.Size() != size {
+		return fmt.Errorf("rollout %s changed while the import was planned; import again", path)
 	}
 	marker := path + appendSuffix
 	sizes := fmt.Sprintf("%d %d\n", info.Size(), info.Size()+int64(len(records)))

@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -323,17 +324,26 @@ func firstLineSessionID(path string) (string, error) {
 	}
 	defer func() { _ = file.Close() }()
 	reader := bufio.NewReaderSize(file, 64<<10)
-	line, err := reader.ReadSlice('\n')
-	for errors.Is(err, bufio.ErrBufferFull) {
-		var more []byte
-		more, err = reader.ReadSlice('\n')
-		line = append(append([]byte{}, line...), more...)
+	var line []byte
+	for {
+		chunk, err := reader.ReadSlice('\n')
+		// ReadSlice reuses its buffer, so each chunk is copied before the next
+		// read.
+		line = append(line, chunk...)
 		if len(line) > 64<<20 {
 			return "", fmt.Errorf("%s: session metadata is too large", path)
 		}
-	}
-	if err != nil {
-		return "", nil
+		if errors.Is(err, bufio.ErrBufferFull) {
+			continue
+		}
+		if errors.Is(err, io.EOF) {
+			// Codex is still writing the first record of a new rollout.
+			return "", nil
+		}
+		if err != nil {
+			return "", fmt.Errorf("read %s: %w", path, err)
+		}
+		break
 	}
 	var first struct {
 		Payload struct {
@@ -341,8 +351,8 @@ func firstLineSessionID(path string) (string, error) {
 			SessionID string `json:"session_id"`
 		} `json:"payload"`
 	}
-	if json.Unmarshal(line, &first) != nil {
-		return "", nil
+	if err := json.Unmarshal(line, &first); err != nil {
+		return "", fmt.Errorf("decode the first record of %s: %w", path, err)
 	}
 	if first.Payload.SessionID != "" {
 		return first.Payload.SessionID, nil
@@ -565,7 +575,8 @@ func (m boundaryMap) moved(offset int64) (int64, error) {
 	return 0, errors.New("referenced offset is not a record boundary of the rewritten rollout")
 }
 
-// baseReference matches the object and byte offset of a history_base reference.
+// baseObject and baseOffset match the object and byte offset of a
+// history_base reference.
 var (
 	baseObject = regexp.MustCompile(`"history_base"\s*:\s*\{[^{}]*?"thread_id"\s*:\s*"([0-9a-fA-F-]{36})"`)
 	baseOffset = regexp.MustCompile(`"end_byte_offset"\s*:\s*(\d+)`)
@@ -610,7 +621,7 @@ func rewriteBase(data []byte, current historyBase, object string, offset int64) 
 // revertedTurn returns the ID of the turn that a revert snapshot removed: the
 // turn whose start record has the referenced ordinal in the referenced object.
 func revertedTurn(target rolloutFile, base historyBase) (string, error) {
-	for line := range bytes.Lines(target.data[base.EndByteOffset:]) {
+	if line, _, _ := bytes.Cut(target.data[base.EndByteOffset:], []byte{'\n'}); len(line) > 0 {
 		var record struct {
 			Ordinal int64 `json:"ordinal"`
 			Payload struct {
@@ -624,7 +635,6 @@ func revertedTurn(target rolloutFile, base historyBase) (string, error) {
 		if record.Ordinal == base.EndOrdinalExclusive && record.Payload.Type == "task_started" && record.Payload.TurnID != "" {
 			return record.Payload.TurnID, nil
 		}
-		break
 	}
 	return "", fmt.Errorf("revert of %s does not start at a turn", base.ObjectID)
 }

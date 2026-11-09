@@ -14,36 +14,37 @@ func mustNew(t *testing.T, moves ...Move) Mapping {
 	return mapping
 }
 
-func TestStringMovesPathsAtBoundariesOnly(t *testing.T) {
+func TestPathMovesPathsAtBoundariesOnly(t *testing.T) {
 	mapping := mustNew(t, Move{From: "/work/project", To: "/home/me/project"})
 
 	// when
-	moved := mapping.String("cd /work/project/src && ls /work/project-other /work/project")
+	moved := mapping.Path("cd /work/project/src && ls /work/project-other /work/project")
 
 	// then
 	if want := "cd /home/me/project/src && ls /work/project-other /home/me/project"; moved != want {
-		t.Fatalf("String() = %q, want %q", moved, want)
+		t.Fatalf("Path() = %q, want %q", moved, want)
 	}
 }
 
-func TestStringPrefersTheLongestNestedSource(t *testing.T) {
+func TestPathPrefersTheLongestNestedSource(t *testing.T) {
 	mapping := mustNew(t,
 		Move{From: "/Users/a", To: "/Users/b"},
 		Move{From: "/Users/a/.claude/projects/-Users-a", To: "/Users/b/.claude/projects/-Users-b"},
 	)
 
 	// when
-	moved := mapping.String("memory at /Users/a/.claude/projects/-Users-a/memory, cwd /Users/a")
+	moved := mapping.Path("memory at /Users/a/.claude/projects/-Users-a/memory, cwd /Users/a")
 
 	// then
 	if want := "memory at /Users/b/.claude/projects/-Users-b/memory, cwd /Users/b"; moved != want {
-		t.Fatalf("String() = %q, want %q", moved, want)
+		t.Fatalf("Path() = %q, want %q", moved, want)
 	}
 }
 
 func TestRewriteKeepsEveryOtherByte(t *testing.T) {
 	mapping := mustNew(t, Move{From: "/work/project", To: "/target"})
-	record := []byte(`{"cwd" : "/work/project", "n":1.50, "nested":"{\"dir\":\"/work/project/a\"}", "text":"é /work/projects"}`)
+	// The unchanged string keeps an escape that Go would not write.
+	record := []byte(`{"cwd" : "/work/project", "n":1.50, "nested":"{\"dir\":\"/work/project/a\"}", "text":"\u00e9 /work/projects"}`)
 
 	// when
 	rewritten, changed, err := mapping.Rewrite(record)
@@ -52,7 +53,7 @@ func TestRewriteKeepsEveryOtherByte(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := `{"cwd" : "/target", "n":1.50, "nested":"{\"dir\":\"/target/a\"}", "text":"é /work/projects"}`
+	want := `{"cwd" : "/target", "n":1.50, "nested":"{\"dir\":\"/target/a\"}", "text":"\u00e9 /work/projects"}`
 	if string(rewritten) != want || changed != 2 {
 		t.Fatalf("Rewrite() = %s (%d changed), want %s", rewritten, changed, want)
 	}

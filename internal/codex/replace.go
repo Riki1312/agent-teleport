@@ -22,15 +22,6 @@ const (
 	phaseNewVerified replacePhase = "new-verified"
 )
 
-// interruptionError simulates a process exit at a replacement checkpoint.
-type interruptionError struct {
-	phase replacePhase
-}
-
-func (e *interruptionError) Error() string {
-	return "simulated interruption after " + string(e.phase)
-}
-
 // resetThreadFunc deletes the session's thread state and rollout through Codex.
 type resetThreadFunc func() error
 
@@ -215,8 +206,6 @@ func runCheckpoint(checkpoint checkpointFunc, phase replacePhase) error {
 	}
 	return checkpoint(phase)
 }
-
-// writeExclusive creates path with owner-only permissions and syncs its content.
 
 // stageSuffix and rollbackSuffix name the recovery files kept next to a
 // rollout while it is written or replaced.

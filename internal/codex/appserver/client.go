@@ -12,6 +12,7 @@ import (
 	"os"
 	"os/exec"
 	"strings"
+	"sync"
 
 	"github.com/Riki1312/agent-teleport/internal/buildinfo"
 )
@@ -281,7 +282,7 @@ func (c *Client) send(message any) error {
 }
 
 func (c *Client) stderrSuffix() string {
-	value := strings.TrimSpace(c.stderr.buffer.String())
+	value := strings.TrimSpace(c.stderr.String())
 	if value == "" {
 		return ""
 	}
@@ -300,13 +301,23 @@ func withCodexHome(environment []string, home string) []string {
 
 // limitedBuffer keeps the first maxStderrSize bytes of App Server diagnostics
 // and discards the rest, so a noisy server cannot grow memory without bound.
+// The process copies into it from its own goroutine, so access is locked.
 type limitedBuffer struct {
+	mu     sync.Mutex
 	buffer bytes.Buffer
 }
 
 func (b *limitedBuffer) Write(data []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
 	if remaining := maxStderrSize - b.buffer.Len(); remaining > 0 {
 		b.buffer.Write(data[:min(len(data), remaining)])
 	}
 	return len(data), nil
+}
+
+func (b *limitedBuffer) String() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buffer.String()
 }

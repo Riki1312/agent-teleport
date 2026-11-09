@@ -16,6 +16,11 @@ import (
 // sessions are skipped where every provider is consulted.
 var ErrNotInstalled = errors.New("not installed")
 
+// ErrDiverged reports that the local copy of a session and the incoming one
+// have diverged, or that the local copy belongs to another workspace, so the
+// fast-forward rule cannot update it.
+var ErrDiverged = errors.New("diverged from the archive")
+
 // Adapter describes one supported provider.
 type Adapter struct {
 	// ID identifies the provider in archive manifests, such as openai-codex.

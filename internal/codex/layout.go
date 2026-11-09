@@ -3,7 +3,6 @@ package codex
 import (
 	"bytes"
 	"encoding/json"
-	"fmt"
 
 	"github.com/Riki1312/agent-teleport/internal/semver"
 )
@@ -60,18 +59,9 @@ var layouts = []layout{
 // layoutFor returns the layout of a Codex version and whether that version is
 // within the tested range. Versions older than every layout fail closed.
 func layoutFor(version string) (layout, bool, error) {
-	parsed, err := semver.Parse(version)
-	if err != nil {
-		return layout{}, false, fmt.Errorf("Codex: %w", err)
-	}
-	for index := len(layouts) - 1; index >= 0; index-- {
-		candidate := layouts[index]
-		if parsed.Compare(semver.MustParse(candidate.minimum)) >= 0 {
-			tested := parsed.Compare(semver.MustParse(candidate.newestTested)) <= 0
-			return candidate, tested, nil
-		}
-	}
-	return layout{}, false, fmt.Errorf("Codex %s is unsupported; agent-teleport supports Codex %s or newer", version, layouts[0].minimum)
+	return semver.Select("Codex", version, layouts, func(candidate layout) semver.Range {
+		return semver.Range{Minimum: candidate.minimum, NewestTested: candidate.newestTested}
+	})
 }
 
 func (l layout) isWorkspaceEvent(kind eventKind) bool {

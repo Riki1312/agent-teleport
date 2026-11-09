@@ -241,3 +241,17 @@ func writeRollout(t *testing.T, home, name string, data []byte) string {
 	}
 	return path
 }
+
+func TestFirstLineSessionIDReadsRecordsLongerThanItsBuffer(t *testing.T) {
+	instructions := strings.Repeat("x", 200<<10)
+	first := `{"type":"session_meta","payload":{"id":"child","session_id":"` + testSessionID + `","base_instructions":"` + instructions + `"}}` + "\n"
+	path := writeRollout(t, t.TempDir(), "rollout-large.jsonl", []byte(first))
+
+	// when
+	sessionID, err := firstLineSessionID(path)
+
+	// then
+	if err != nil || sessionID != testSessionID {
+		t.Fatalf("firstLineSessionID() = %q, %v", sessionID, err)
+	}
+}

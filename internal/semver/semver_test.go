@@ -25,3 +25,28 @@ func TestParseRejectsOtherShapes(t *testing.T) {
 		}
 	}
 }
+
+func TestSelectChoosesTheNewestApplicableRange(t *testing.T) {
+	ranges := []Range{{Minimum: "1.0.0", NewestTested: "1.2.0"}, {Minimum: "2.0.0", NewestTested: "2.1.0"}}
+	identity := func(bounds Range) Range { return bounds }
+	for _, test := range []struct {
+		version string
+		want    string
+		tested  bool
+		fails   bool
+	}{
+		{version: "0.9.0", fails: true},
+		{version: "1.1.0", want: "1.0.0", tested: true},
+		{version: "1.9.0", want: "1.0.0", tested: false},
+		{version: "2.1.0", want: "2.0.0", tested: true},
+		{version: "3.0.0", want: "2.0.0", tested: false},
+	} {
+		// when
+		selected, tested, err := Select("Agent", test.version, ranges, identity)
+
+		// then
+		if (err != nil) != test.fails || (err == nil && (selected.Minimum != test.want || tested != test.tested)) {
+			t.Fatalf("Select(%s) = %+v, %t, %v", test.version, selected, tested, err)
+		}
+	}
+}

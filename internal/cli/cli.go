@@ -166,7 +166,10 @@ func (a *App) export(ctx context.Context, args []string) error {
 	if len(positional) > 1 {
 		return &UsageError{Message: "export accepts at most one session selector"}
 	}
-	selector := strings.Join(positional, "")
+	selector := ""
+	if len(positional) == 1 {
+		selector = positional[0]
+	}
 	if selector == "" && !*last {
 		return &UsageError{Message: "export needs a SESSION or --last\n\n" + exportUsage}
 	}
@@ -293,6 +296,9 @@ func (a *App) importArchive(ctx context.Context, args []string) error {
 	}
 	if *dryRun && *resume {
 		return &UsageError{Message: "--dry-run and --resume cannot be used together"}
+	}
+	if positional[0] == "-" && *resume {
+		return &UsageError{Message: "--resume needs a terminal, so it cannot be used with an archive from stdin"}
 	}
 	source, err := a.readArchive(positional[0])
 	if err != nil {

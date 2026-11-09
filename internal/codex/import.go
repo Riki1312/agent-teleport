@@ -82,9 +82,17 @@ func (s *Store) recoverSession(client *appserver.Client, session codexSession) e
 		}
 		for _, destination := range stored.pending {
 			if thread != session.root {
-				return fmt.Errorf("thread %s has an interrupted replacement that agent-teleport cannot recover", thread)
+				// Only the root is ever replaced; any other thread can only
+				// have a stage file left by an interrupted placement.
+				if _, err := os.Stat(rollbackPath(destination)); !errors.Is(err, os.ErrNotExist) {
+					return fmt.Errorf("thread %s has an interrupted replacement that agent-teleport cannot recover", thread)
+				}
+				if err := fsutil.RemoveIfExists(stagePath(destination)); err != nil {
+					return fmt.Errorf("remove abandoned stage file: %w", err)
+				}
+				continue
 			}
-			if err := s.layout.recoverReplacement(destination, thread, resetThread(client, thread), s.repairThread(client, destination)); err != nil {
+			if err := s.layout.recoverReplacement(destination, thread, resetThread(client, thread), s.repairThread(client)); err != nil {
 				return err
 			}
 		}
@@ -116,7 +124,9 @@ type filePlan struct {
 	// path is the local file a keep, append, or replace step refers to, or
 	// the destination of a place step.
 	path string
-	// records are the bytes an append step adds.
+	// size is the length of the local object an append step was planned
+	// against, and records are the bytes it adds.
+	size    int64
 	records []byte
 }
 
@@ -207,7 +217,7 @@ func (s *Store) planThread(session codexSession, thread string, replace bool, pl
 		}
 		plan.files[chain[0]] = filePlan{step: stepPlace, path: path}
 		for _, index := range chain[1:] {
-			if session.files[index].meta.SessionID == session.root && thread != session.root {
+			if isSubAgent(session.files[index], session.root) {
 				return "", fmt.Errorf("reverted sub-agent thread %s is not supported", thread)
 			}
 			plan.files[index] = filePlan{step: stepReplay}
@@ -270,18 +280,29 @@ func (s *Store) planThread(session codexSession, thread string, replace bool, pl
 		plan.keep(chain[last], incoming[last], local[last], records)
 	case len(incomingSegments) > len(localSegments) && relation == historiesEqual:
 		keepLast()
-	case relation == historiesDiverged && replace && thread == session.root && len(chain) == 1 && len(local) == 1:
+	case relation == historiesDiverged && thread == session.root && len(session.files) == 1 && len(local) == 1:
+		if !replace {
+			return "", fmt.Errorf("session %s has %w; pass --replace to overwrite the local copy", thread, provider.ErrDiverged)
+		}
 		plan.files[chain[0]] = filePlan{step: stepReplace, path: stored.active[0]}
 		return provider.Replaced, nil
-	case relation == historiesDiverged && thread == session.root:
-		return "", fmt.Errorf("session %s has diverged from the archive; pass --replace to overwrite the local copy", thread)
 	default:
-		return "", fmt.Errorf("thread %s has diverged from the archive; delete it in Codex and import again", thread)
+		return "", fmt.Errorf("thread %s has %w; only sessions of one thread can be replaced, so delete it in Codex and import again", thread, provider.ErrDiverged)
 	}
 	for _, index := range chain[common:] {
+		if isSubAgent(session.files[index], session.root) {
+			return "", fmt.Errorf("reverted sub-agent thread %s is not supported", thread)
+		}
 		plan.files[index] = filePlan{step: stepReplay}
 	}
 	return provider.Updated, nil
+}
+
+// isSubAgent reports whether a rollout belongs to a thread that the session's
+// root spawned. Codex loads such threads only through their parent, so their
+// reverts cannot be replayed.
+func isSubAgent(file rolloutFile, root string) bool {
+	return file.meta.ID != root && file.meta.SessionID == root
 }
 
 // keep plans to leave a local object as it is, or to append records to it,
@@ -291,7 +312,7 @@ func (p *sessionPlan) keep(index int, incoming, local rolloutFile, records []byt
 	if len(records) > 0 {
 		step = stepAppend
 	}
-	p.files[index] = filePlan{step: step, path: local.location, records: records}
+	p.files[index] = filePlan{step: step, path: local.location, size: int64(len(local.data)), records: records}
 	p.objects[incoming.object] = localObject{object: local.object, data: append(append([]byte{}, local.data...), records...), from: incoming.data}
 }
 
@@ -372,7 +393,7 @@ func (s *Store) executePlan(client *appserver.Client, session codexSession, plan
 		switch step.step {
 		case stepKeep:
 		case stepAppend:
-			if err := appendRecords(s.home, file.meta.ID, step.path, step.records); err != nil {
+			if err := appendRecords(s.home, file.meta.ID, step.path, step.size, step.records); err != nil {
 				return err
 			}
 		case stepPlace:
@@ -466,7 +487,7 @@ func (s *Store) replayRevert(session codexSession, snapshot rolloutFile, objects
 		return localObject{}, err
 	}
 	if len(continuation) > 0 {
-		if err := appendRecords(s.home, thread, created[0], continuation); err != nil {
+		if err := appendRecords(s.home, thread, created[0], int64(len(native.data)), continuation); err != nil {
 			return localObject{}, err
 		}
 	}
@@ -577,7 +598,7 @@ func (s *Store) replaceExisting(client *appserver.Client, destination string, se
 	if thread := findThread(threads, id); thread != nil && !isQuiescent(thread.Status.Type) {
 		return fmt.Errorf("existing session %s is not quiescent (status %q)", id, thread.Status.Type)
 	}
-	if err := s.layout.replaceRollout(destination, session.data, session.meta, resetThread(client, id), s.repairThread(client, destination), nil); err != nil {
+	if err := s.layout.replaceRollout(destination, session.data, session.meta, resetThread(client, id), s.repairThread(client), nil); err != nil {
 		return fmt.Errorf("replace session %s: %w", id, err)
 	}
 	return nil
@@ -587,8 +608,8 @@ func resetThread(client *appserver.Client, sessionID string) resetThreadFunc {
 	return func() error { return client.Delete(sessionID) }
 }
 
-func (s *Store) repairThread(client *appserver.Client, destination string) repairThreadFunc {
-	return func(meta sessionMeta) error { return s.verifySession(client, destination, meta) }
+func (s *Store) repairThread(client *appserver.Client) repairThreadFunc {
+	return func(meta sessionMeta) error { return s.verifySession(client, meta) }
 }
 
 // placeRollout writes a new rollout through the stage file and links it into
@@ -620,7 +641,7 @@ func (s *Store) placeRollout(destination string, rollout []byte) error {
 // verifySession lets Codex scan and repair a self-contained thread, then
 // requires the scan, the persisted state, and a thread read to report it in
 // its workspace.
-func (s *Store) verifySession(client *appserver.Client, _ string, meta sessionMeta) error {
+func (s *Store) verifySession(client *appserver.Client, meta sessionMeta) error {
 	threads, err := client.List(appserver.ListQuery{SourceKinds: allSources})
 	if err != nil {
 		return err
@@ -658,7 +679,7 @@ func (s *Store) verifySession(client *appserver.Client, _ string, meta sessionMe
 func (s *Store) verifyImportedSession(client *appserver.Client, session codexSession, plan sessionPlan) error {
 	root := session.head(session.root)
 	if len(session.files) == 1 && root.meta.Base == nil {
-		return s.verifySession(client, plan.files[0].path, root.meta)
+		return s.verifySession(client, root.meta)
 	}
 	if _, err := client.List(appserver.ListQuery{SourceKinds: allSources}); err != nil {
 		return err

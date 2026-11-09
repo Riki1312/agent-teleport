@@ -12,7 +12,7 @@ func TestAppendRecordsAppendsAndRemovesItsMarker(t *testing.T) {
 	home, path := appendFixture(t, "first\n")
 
 	// when
-	err := appendRecords(home, testSessionID, path, []byte("second\n"))
+	err := appendRecords(home, testSessionID, path, 6, []byte("second\n"))
 
 	// then
 	if err != nil {
@@ -74,13 +74,27 @@ func TestAppendRecordsRefusesAThreadOpenInCodex(t *testing.T) {
 	defer unlock()
 
 	// when
-	err = appendRecords(home, testSessionID, path, []byte("second\n"))
+	err = appendRecords(home, testSessionID, path, 6, []byte("second\n"))
 
 	// then
 	if !errors.Is(err, errSessionOpen) {
 		t.Fatalf("appendRecords error = %v", err)
 	}
 	assertFileEquals(t, path, []byte("first\n"))
+}
+
+func TestAppendRecordsRefusesARolloutThatGrewSinceItWasPlanned(t *testing.T) {
+	home, path := appendFixture(t, "first\nnew turn\n")
+
+	// when
+	err := appendRecords(home, testSessionID, path, 6, []byte("second\n"))
+
+	// then
+	if err == nil || !strings.Contains(err.Error(), "changed while the import was planned") {
+		t.Fatalf("appendRecords error = %v", err)
+	}
+	assertFileEquals(t, path, []byte("first\nnew turn\n"))
+	assertMissing(t, path+appendSuffix)
 }
 
 func appendFixture(t *testing.T, content string) (string, string) {

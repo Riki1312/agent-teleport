@@ -20,6 +20,8 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+
+	"github.com/Riki1312/agent-teleport/internal/fsutil"
 )
 
 // Format identifies agent-teleport archives in their manifest.
@@ -173,19 +175,9 @@ func (a Archive) WriteFile(path string) error {
 	if err != nil {
 		return err
 	}
-	file, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
+	err = fsutil.WriteExclusive(path, encoded)
 	if errors.Is(err, fs.ErrExist) {
 		return fmt.Errorf("output already exists: %s", path)
-	}
-	if err != nil {
-		return fmt.Errorf("create archive: %w", err)
-	}
-	_, err = file.Write(encoded)
-	if err == nil {
-		err = file.Sync()
-	}
-	if closeErr := file.Close(); err == nil {
-		err = closeErr
 	}
 	if err != nil {
 		_ = os.Remove(path)

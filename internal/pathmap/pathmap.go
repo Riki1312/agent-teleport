@@ -129,7 +129,7 @@ func (m Mapping) rewriteStrings(data []byte) ([]byte, int, error) {
 		if err := json.Unmarshal(data[start:end+1], &value); err != nil {
 			return nil, 0, err
 		}
-		replaced := m.String(value)
+		replaced := m.Path(value)
 		if replaced == value {
 			continue
 		}
@@ -148,9 +148,9 @@ func (m Mapping) rewriteStrings(data []byte) ([]byte, int, error) {
 	return append(output, data[copied:]...), changed, nil
 }
 
-// String replaces each mention of a source directory in value that starts and
+// Path replaces each mention of a source directory in value that starts and
 // ends at a path boundary.
-func (m Mapping) String(value string) string {
+func (m Mapping) Path(value string) string {
 	var output strings.Builder
 	copied := 0
 	for offset := 0; offset < len(value); {

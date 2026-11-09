@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"slices"
@@ -50,8 +51,8 @@ func (s *Store) prepareSession(source archive.Archive, target string) (claudeSes
 	if err != nil {
 		return claudeSession{}, err
 	}
-	if _, _, err := layoutFor(s.version); err != nil {
-		return claudeSession{}, err
+	if sourceLayout.minimum != s.layout.minimum {
+		return claudeSession{}, fmt.Errorf("archive from Claude Code %s uses a transcript layout that Claude Code %s does not read", source.Manifest.ProviderVersion, s.version)
 	}
 	var moves []pathmap.Move
 	for _, move := range []pathmap.Move{
@@ -104,6 +105,9 @@ type importPlan struct {
 	outcome provider.ImportOutcome
 	// writes are the files to place in folder, the session transcript last.
 	writes []sessionFile
+	// planned holds the local content each write was planned against, by
+	// path; a path without local content is absent.
+	planned map[string][]byte
 	// removals are absolute paths of local files the archive replaces: files
 	// of a diverged copy that the archive lacks, and copies of the session in
 	// other project folders.
@@ -142,7 +146,7 @@ func (s *Store) planImport(incoming claudeSession, replace bool) (importPlan, er
 			continue
 		}
 		if !replace {
-			return importPlan{}, fmt.Errorf("Claude Code session %s exists for workspace %s; import it with --cwd there, or pass --replace to move it", incoming.id, readFolderWorkspace(folder, incoming.id))
+			return importPlan{}, fmt.Errorf("Claude Code session %s exists for workspace %s (%w); import it with --cwd there, or pass --replace to move it", incoming.id, readFolderWorkspace(folder, incoming.id), provider.ErrDiverged)
 		}
 		other, err := readLocalFiles(folder, incoming.id)
 		if err != nil {
@@ -157,8 +161,10 @@ func (s *Store) planImport(incoming claudeSession, replace bool) (importPlan, er
 		return importPlan{}, err
 	}
 	local := make(map[string][]byte, len(localFiles))
+	plan.planned = make(map[string][]byte, len(localFiles))
 	for _, file := range localFiles {
 		local[file.path] = file.data
+		plan.planned[file.path] = file.data
 	}
 
 	comparisons := make([]fileComparison, len(incoming.files))
@@ -175,7 +181,7 @@ func (s *Store) planImport(incoming claudeSession, replace bool) (importPlan, er
 		(seen[metadataChanged] && !seen[incomingAhead] && !seen[localAhead])
 	switch {
 	case isDiverged && !replace:
-		return importPlan{}, fmt.Errorf("the local copy of session %s has diverged from the archive; pass --replace to overwrite it", incoming.id)
+		return importPlan{}, fmt.Errorf("the local copy of session %s has %w; pass --replace to overwrite it", incoming.id, provider.ErrDiverged)
 	case isDiverged || len(plan.removals) > 0:
 		plan.outcome = provider.Replaced
 		for path := range local {
@@ -239,10 +245,15 @@ func compareFile(file sessionFile, local map[string][]byte) fileComparison {
 }
 
 // execute places the planned files, then removes the replaced ones, so an
-// interruption leaves the archived session in place.
+// interruption leaves the archived session in place. Claude Code takes no lock,
+// so each file is checked against its planned content just before it is
+// replaced, which narrows the window for losing records a new process wrote.
 func (p importPlan) execute() error {
 	for _, file := range p.writes {
 		destination := filepath.Join(p.folder, filepath.FromSlash(file.path))
+		if err := p.requireUnchanged(file.path, destination); err != nil {
+			return err
+		}
 		if err := os.MkdirAll(filepath.Dir(destination), 0o700); err != nil {
 			return err
 		}
@@ -255,6 +266,22 @@ func (p importPlan) execute() error {
 			return fmt.Errorf("remove replaced session file: %w", err)
 		}
 		removeEmptyParents(path)
+	}
+	return nil
+}
+
+// requireUnchanged fails when the local file at destination no longer has the
+// content the import was planned against.
+func (p importPlan) requireUnchanged(path, destination string) error {
+	current, err := os.ReadFile(destination)
+	planned, existed := p.planned[path]
+	switch {
+	case errors.Is(err, fs.ErrNotExist) && !existed:
+		return nil
+	case err != nil && !errors.Is(err, fs.ErrNotExist):
+		return err
+	case !existed || !bytes.Equal(current, planned):
+		return fmt.Errorf("%s changed while the import was planned; import again", path)
 	}
 	return nil
 }

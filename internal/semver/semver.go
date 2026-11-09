@@ -61,3 +61,29 @@ func (v Version) Compare(other Version) int {
 		return 1
 	}
 }
+
+// Range is the span of versions that one storage layout supports: every
+// version from Minimum on, tested through NewestTested.
+type Range struct {
+	Minimum      string
+	NewestTested string
+}
+
+// Select returns the candidate with the newest range whose minimum is at most
+// version, and whether version is within that range's tested versions.
+// Candidates are ordered oldest first; versions older than every range fail
+// closed with an error that names product.
+func Select[T any](product, version string, candidates []T, rangeOf func(T) Range) (T, bool, error) {
+	var none T
+	parsed, err := Parse(version)
+	if err != nil {
+		return none, false, fmt.Errorf("%s: %w", product, err)
+	}
+	for index := len(candidates) - 1; index >= 0; index-- {
+		bounds := rangeOf(candidates[index])
+		if parsed.Compare(MustParse(bounds.Minimum)) >= 0 {
+			return candidates[index], parsed.Compare(MustParse(bounds.NewestTested)) <= 0, nil
+		}
+	}
+	return none, false, fmt.Errorf("%s %s is unsupported; agent-teleport supports %s %s or newer", product, version, product, rangeOf(candidates[0]).Minimum)
+}

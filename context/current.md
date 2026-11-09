@@ -11,8 +11,8 @@
 ## Repository state
 
 - Commands: `list`, `export`, `import`, `inspect`, `doctor`, with per-command help and `--version`.
-- The archive manifest lists every payload file with its size and SHA-256 digest, ready for multi-file histories and unpacked repository sessions.
-- Import applies the fast-forward update rule; `--replace` uses the recoverable rollback transaction.
+- The archive manifest lists every payload file with its size and SHA-256 digest.
+- Import applies the fast-forward update rule. `--replace` uses the recoverable rollback transaction for single-thread Codex sessions and atomic renames for Claude Code sessions; other diverged Codex sessions must be deleted in Codex first.
 - Workspace remapping rewrites every boundary-delimited mention of the workspace in metadata events and preserves all other bytes; remapping there and back is the identity on the native fixture.
 - Collision checks cover active and archived Codex sessions.
 - CI runs golangci-lint (doc comments required), Prettier, and the Go tests on Linux and macOS, with the required two-home E2E tests; each job pairs one Codex version (0.165.0 to 0.167.0) with one Claude Code version (2.1.317 to 2.1.319). `make check` runs the same checks locally.

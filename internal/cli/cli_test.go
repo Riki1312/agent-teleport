@@ -30,6 +30,7 @@ func TestParseAcceptsFlagsBetweenArguments(t *testing.T) {
 func TestImportRejectsInvalidOptionsBeforeReadingArchive(t *testing.T) {
 	for _, arguments := range [][]string{
 		{"import", "session.teleport", "--dry-run", "--resume"},
+		{"import", "-", "--resume"},
 		{"import", "session.teleport", "--if-exists", "replace"},
 		{"import"},
 		{"import", "one.teleport", "two.teleport"},
