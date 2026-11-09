@@ -179,6 +179,15 @@ func (s *Store) planSession(session codexSession, replace bool) (sessionPlan, er
 			}
 		}
 	}
+	// Only threads the plan writes must be closed, so comparing a session that
+	// Codex has open succeeds.
+	for index, file := range session.files {
+		if plan.files[index].step != stepKeep {
+			if err := requireClosed(s.home, file.meta.ID); err != nil {
+				return sessionPlan{}, err
+			}
+		}
+	}
 	return plan, nil
 }
 
@@ -232,11 +241,6 @@ func (s *Store) planThread(session codexSession, thread string, replace bool, pl
 	replacingRoot := replace && thread == session.root
 	if member && local[0].meta.CWD != first.meta.CWD && !replacingRoot {
 		return "", fmt.Errorf("thread %s already exists in %s; import there with --cwd, or pass --replace", thread, local[0].meta.CWD)
-	}
-	if thread == session.root || member {
-		if err := requireClosed(s.home, thread); err != nil {
-			return "", err
-		}
 	}
 	incoming := make([]rolloutFile, len(chain))
 	for position, index := range chain {

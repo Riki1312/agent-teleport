@@ -1,6 +1,6 @@
 # Architecture
 
-`agent-teleport` moves the recorded history of a local coding-agent session to another workstation, or into a repository, so the session can be resumed with the agent's own CLI. This document describes the current design and the planned work it is built for. Durable decisions and their rationale live in [`context/decisions.md`](context/decisions.md).
+`agent-teleport` moves the recorded history of a local coding-agent session to another workstation, or into a repository, so the session can be resumed with the agent's own CLI. This document describes the current design. Durable decisions and their rationale live in [`context/decisions.md`](context/decisions.md).
 
 ## Scope
 
@@ -32,6 +32,9 @@ agent-teleport list    [--all] [--json]
 agent-teleport export  (SESSION | --last) [--all] [-o PATH|-]
 agent-teleport import  (ARCHIVE | -) [--cwd PATH] [--replace] [--dry-run] [--resume]
 agent-teleport inspect (ARCHIVE | -) [--json]
+agent-teleport save    (SESSION | --last) [--all] [--name NAME] [--allow-secrets]
+agent-teleport open    NAME [--replace] [--dry-run] [--resume]
+agent-teleport status  [--json]
 agent-teleport doctor  [--json]
 ```
 
@@ -39,6 +42,7 @@ agent-teleport doctor  [--json]
 - `export` accepts a session ID, a unique ID prefix, or an exact title. Without `-o` it writes `<title>-<id>.teleport` to the current directory; `-o -` writes the archive to stdout and every diagnostic to stderr.
 - `import` maps the session to the current directory unless `--cwd` names another one. It prints the command that resumes the session, and runs it with `--resume`.
 - `inspect` validates an archive, describes its session, and reports whether it can be imported into the current directory. It never changes local state.
+- `save`, `open`, and `status` keep sessions in the current Git repository; see [Repository sessions](#repository-sessions).
 - `doctor` reports the detected agents, their versions, and whether they are supported.
 
 Usage errors exit with status 2 and other failures with status 1. An interactive session picker for `export` is planned; it will receive plain session values and never run when stdout is redirected or JSON is requested.
@@ -109,6 +113,8 @@ internal/archive          provider-neutral manifest, packing, validation
 internal/codex            Codex adapter: discovery, export, import, repair
 internal/codex/appserver  JSON-RPC client for codex app-server --stdio
 internal/claude           Claude Code adapter: discovery, export, import
+internal/repository       sessions saved in a Git repository
+internal/secrets          credential scan before saving
 internal/pathmap          reversible workspace path moves in JSON records and text
 internal/fsutil           stable reads and atomic writes
 internal/semver           provider version ordering
@@ -173,8 +179,6 @@ Any failure or interruption before the commit point restores the old rollout, de
 
 Each rollout layout covers a range of Codex versions: its turn boundary events, its workspace metadata events, and the size of its revert header. The current layout starts at Codex 0.165.0 and is tested through 0.167.0. Older versions fail closed. Newer versions are accepted with a `doctor` warning, because Codex releases every few days, while structural validation still rejects rollouts it does not recognize. CI runs the two-home test against every tested version, and raising the tested range requires it to pass against the new release. Older layouts are removed rather than kept.
 
-Codex App Server forks a thread natively with `thread/fork`, which repository sessions will use for `save --as`.
-
 ## Claude Code adapter
 
 Claude Code keeps each session as an append-only JSONL transcript, `projects/<folder>/<session>.jsonl`, under its configuration directory (`CLAUDE_CONFIG_DIR`, by default `~/.claude`). The folder is named after the workspace the session started in: every UTF-16 code unit other than an ASCII letter or digit becomes `-`, and a name longer than 200 characters is cut to 200 and suffixed with `-` and a base-36 hash of the path. Beside the transcript, the session folder `<session>/` holds sub-agent transcripts and metadata in `subagents/` and tool outputs too large for the transcript in `tool-results/`. Rewinds are branches of the record tree inside the same transcript, and a native fork is a separate, self-contained session.
@@ -200,22 +204,17 @@ Claude Code has no index and no server: it resumes a session by finding its tran
 
 The current layout starts at Claude Code 2.1.317 and is tested through 2.1.319, with the same rules as Codex: older versions fail closed, newer versions are accepted with a `doctor` warning, and structural validation rejects unknown files.
 
-## Repository sessions (planned)
+## Repository sessions
 
-Sessions will also be kept in a repository, next to the code they discuss:
+Sessions can be kept in a Git repository, next to the code they discuss, and shared by committing them.
 
-```text
-agent-teleport save   [SESSION | --last] [--name NAME] [--as NAME]
-agent-teleport open   NAME [--resume]
-agent-teleport status [--json]
-```
-
-- A saved session is an unpacked archive under `.agent-teleport/sessions/<name>/`: the same manifest, followed by the payload files as plain JSONL, which Git stores and diffs efficiently because transcripts only grow at the end.
-- Saved paths are relative to the repository root, and `open` maps them to the local checkout.
-- `save` records the Git commit and branch, and applies the update rule; a diverged session is saved under a new name with `--as`, through the provider's native fork.
-- `status` reports each saved session as in sync, local ahead, repository ahead, diverged, or not opened.
-- Saving runs a secret scan and refuses findings unless explicitly accepted, because committing a session publishes it to everyone with repository access.
-- The first save creates `.agent-teleport/` and a `.gitattributes` file that keeps payload diffs out of code review.
+- A saved session is an unpacked archive under `.agent-teleport/sessions/<name>/`: the manifest, followed by the payload files at their payload paths, which Git stores and diffs efficiently because transcripts only grow at the end. The manifest also records the commit and branch checked out when it was saved.
+- Saved paths are relative to the repository. `save` moves the repository root to the placeholder `/agent-teleport/repository` and the provider's home to `/agent-teleport/home`, in every record, and `open` moves them to the local checkout and agent home. The session's workspace must be inside the repository.
+- `save` applies the update rule against the saved copy: a longer local session replaces it, an equal one is left alone, a longer saved copy must be opened first, and a diverged one is refused with two ways out: `open --replace`, or a fork made in the agent and saved under another `--name`.
+- `open` imports the saved copy into its place in the checkout, with the same rule and options as `import`.
+- `status` reports each saved session as in sync, local ahead, repository ahead, diverged, or not opened. Like `save`, it compares through a dry-run import, so it never changes a session.
+- Saving refuses likely credentials in what it adds, unless `--allow-secrets` is given; see `context/decisions.md` for the patterns.
+- A save is written to a hidden sibling directory, verified, and swapped in with renames; the next command restores the previous copy if a swap was interrupted. The first save creates `.agent-teleport/.gitattributes`, which keeps sessions byte for byte in every checkout and marks them as generated, so code review collapses their diffs.
 
 ## Safety and privacy
 
@@ -229,10 +228,11 @@ Session histories can contain prompts, model output, commands, tool results, fil
 
 ## Testing
 
-- Unit tests cover archive validation, rollout and transcript validation, path moves, the update rule, replacement recovery, and CLI parsing.
+- Unit tests cover archive validation and directories, rollout and transcript validation, path moves, the update rule, replacement recovery, secret patterns, saved session names, and CLI parsing.
 - A Codex two-home end-to-end test drives the built binary against a native Codex CLI and sanitized fixtures, without credentials or model calls: export, inspect, piped transfer, every update outcome, replacement recovery, archived sessions, forks, reverts, sub-agents, and resume after repair.
 - A Claude Code two-home end-to-end test records sessions with the native Claude Code CLI against a scripted local Messages API, so it needs no credentials and makes no model calls: sub-agents, saved tool outputs, every update outcome, open and busy sessions, moves between workspaces, a hashed project folder, and resumes whose requests must name only target paths.
-- CI installs every tested version of both providers on Linux and macOS and requires both tests against each.
+- Repository end-to-end tests save sessions of both providers in a Git repository, open them in a clone with another agent home, and follow them through every status, a secret refusal, and a divergence.
+- CI installs every tested version of both providers on Linux and macOS and requires these tests against each.
 - Tests that need authentication or model calls are opt-in smoke tests, never pull-request gates.
 
 ## Design principles

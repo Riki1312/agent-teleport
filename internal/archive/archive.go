@@ -11,7 +11,6 @@ import (
 	"compress/gzip"
 	"crypto/sha256"
 	"encoding/hex"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -53,7 +52,18 @@ type Manifest struct {
 	// source machine. Providers that record paths into it move them on import.
 	Home      string    `json:"home"`
 	CreatedAt time.Time `json:"created_at"`
-	Files     []File    `json:"files"`
+	// Repository records the Git state a repository session was saved at,
+	// and is absent from packed archives.
+	Repository *Repository `json:"repository,omitempty"`
+	Files      []File      `json:"files"`
+}
+
+// Repository is the Git state of a repository when a session was saved in it.
+type Repository struct {
+	// Commit is empty in a repository without commits, and Branch when the
+	// checkout is detached.
+	Commit string `json:"commit,omitempty"`
+	Branch string `json:"branch,omitempty"`
 }
 
 // File describes one payload file listed in a manifest.
@@ -72,6 +82,21 @@ type Header struct {
 	Workspace       string
 	Home            string
 	CreatedAt       time.Time
+	Repository      *Repository
+}
+
+// Header returns the session identity the manifest records, so an archive
+// can be rebuilt with changed payloads or Git state.
+func (m Manifest) Header() Header {
+	return Header{
+		Provider:        m.Provider,
+		ProviderVersion: m.ProviderVersion,
+		SessionID:       m.SessionID,
+		Workspace:       m.Workspace,
+		Home:            m.Home,
+		CreatedAt:       m.CreatedAt,
+		Repository:      m.Repository,
+	}
 }
 
 // Payload is the content of one provider file, addressed by a slash-separated
@@ -99,6 +124,7 @@ func New(header Header, payloads []Payload) (Archive, error) {
 		Workspace:       header.Workspace,
 		Home:            header.Home,
 		CreatedAt:       header.CreatedAt.UTC().Truncate(time.Second),
+		Repository:      header.Repository,
 		Files:           make([]File, 0, len(payloads)),
 	}
 	for _, payload := range payloads {
@@ -131,11 +157,11 @@ func (a Archive) Encode() ([]byte, error) {
 	if err := validateManifest(a.Manifest); err != nil {
 		return nil, err
 	}
-	manifestJSON, err := json.MarshalIndent(a.Manifest, "", "  ")
+	manifestJSON, err := encodeManifest(a.Manifest)
 	if err != nil {
-		return nil, fmt.Errorf("encode manifest: %w", err)
+		return nil, err
 	}
-	entries := append([]Payload{{Path: manifestPath, Data: append(manifestJSON, '\n')}}, a.Payloads...)
+	entries := append([]Payload{{Path: manifestPath, Data: manifestJSON}}, a.Payloads...)
 
 	var encoded bytes.Buffer
 	gzipWriter := gzip.NewWriter(&encoded)
@@ -201,13 +227,8 @@ func Decode(input io.Reader) (Archive, error) {
 	if err != nil {
 		return Archive{}, err
 	}
-	var manifest Manifest
-	decoder := json.NewDecoder(bytes.NewReader(manifestJSON))
-	decoder.DisallowUnknownFields()
-	if err := decoder.Decode(&manifest); err != nil {
-		return Archive{}, fmt.Errorf("decode manifest: %w", err)
-	}
-	if err := validateManifest(manifest); err != nil {
+	manifest, err := decodeManifest(manifestJSON)
+	if err != nil {
 		return Archive{}, err
 	}
 	payloads := make([]Payload, 0, len(manifest.Files))
@@ -216,12 +237,8 @@ func Decode(input io.Reader) (Archive, error) {
 		if err != nil {
 			return Archive{}, err
 		}
-		if int64(len(data)) != file.Size {
-			return Archive{}, fmt.Errorf("archive entry %q has size %d, manifest lists %d", file.Path, len(data), file.Size)
-		}
-		digest := sha256.Sum256(data)
-		if hex.EncodeToString(digest[:]) != file.SHA256 {
-			return Archive{}, fmt.Errorf("archive entry %q does not match its checksum", file.Path)
+		if err := verifyPayload(file, data); err != nil {
+			return Archive{}, err
 		}
 		payloads = append(payloads, Payload{Path: file.Path, Data: data})
 	}

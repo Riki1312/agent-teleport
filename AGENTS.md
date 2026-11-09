@@ -1,6 +1,6 @@
 # agent-teleport
 
-This repository contains `agent-teleport`, a Go CLI that moves resumable coding-agent sessions between workstations and, in planned work, into repositories. OpenAI Codex and Claude Code are the implemented providers.
+This repository contains `agent-teleport`, a Go CLI that moves resumable coding-agent sessions between workstations and into repositories. OpenAI Codex and Claude Code are the implemented providers.
 
 ## Working principles
 

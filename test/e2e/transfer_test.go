@@ -476,6 +476,8 @@ func mkdir(t *testing.T, path string) string {
 	return path
 }
 
+// run runs agent-teleport against an isolated Codex home and returns its
+// stdout, failing unless the command's success matches wantSuccess.
 func run(
 	t *testing.T,
 	binary, codexPath, home string,
@@ -484,8 +486,16 @@ func run(
 	args ...string,
 ) []byte {
 	t.Helper()
+	return runIn(t, binary, cleanEnvironment(home, codexPath), "", stdin, wantSuccess, args...)
+}
+
+// runIn runs agent-teleport with environment in dir, or in the test's
+// directory when dir is empty, and returns its stdout.
+func runIn(t *testing.T, binary string, environment []string, dir string, stdin []byte, wantSuccess bool, args ...string) []byte {
+	t.Helper()
 	command := exec.Command(binary, args...)
-	command.Env = cleanEnvironment(home, codexPath)
+	command.Env = environment
+	command.Dir = dir
 	if stdin != nil {
 		command.Stdin = bytes.NewReader(stdin)
 	}

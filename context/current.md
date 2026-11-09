@@ -6,11 +6,11 @@
 - OpenAI Codex 0.165.0 and newer is implemented, tested through 0.167.0, and Claude Code 2.1.317 and newer, tested through 2.1.319.
 - Fidelity means preserving the recorded session history, not live processes, credentials, project files, or external state.
 - Linux and macOS first; path logic stays testable on Windows.
-- The command surface and the planned repository sessions (`save`, `open`, `status`) are specified in `ARCHITECTURE.md`.
+- The command surface, including repository sessions (`save`, `open`, `status`), is specified in `ARCHITECTURE.md`.
 
 ## Repository state
 
-- Commands: `list`, `export`, `import`, `inspect`, `doctor`, with per-command help and `--version`.
+- Commands: `list`, `export`, `import`, `inspect`, `save`, `open`, `status`, `doctor`, with per-command help and `--version`.
 - The archive manifest lists every payload file with its size and SHA-256 digest.
 - Import applies the fast-forward update rule. `--replace` uses the recoverable rollback transaction for single-thread Codex sessions and atomic renames for Claude Code sessions; other diverged Codex sessions must be deleted in Codex first.
 - Moving a session rewrites every boundary-delimited mention of the workspace in every record and saved tool output and preserves all other bytes; moving there and back is the identity on the native fixtures.
@@ -18,18 +18,17 @@
 - CI runs golangci-lint (doc comments required), Prettier, and the Go tests on Linux and macOS, with the required two-home E2E tests; each job pairs one Codex version (0.165.0 to 0.167.0) with one Claude Code version (2.1.317 to 2.1.319). `make check` runs the same checks locally.
 - Whole sessions transfer: sub-agent threads, forks with their ancestor prefixes, and reverts, which import replays through `thread/revert`. Updates append records under Codex's thread writer lock.
 - The CLI works through `provider.Adapter` and `provider.Store`; path rewriting, durable file writes, and version ordering are shared packages.
+- Repository sessions are unpacked archives with placeholder paths; `save`, `open`, and `status` compare through a dry-run import, and `save` runs the built-in secret scan. Their E2E tests run against both native CLIs with Git clones.
 - Claude Code sessions transfer as files: transcript, sub-agent files, and saved tool outputs, with the workspace and project folder moved everywhere. The Claude Code E2E test records sessions against a scripted local Messages API.
 - The fixtures in `testdata/codex` are a sanitized Codex 0.167.0 rollout from a throwaway home, a native fork of it, and a sanitized session with a sub-agent and a revert followed by another turn.
 
 ## Next work
 
-1. Implement repository sessions: `save`, `open`, `status`, repository-relative paths, Git commit recording, secret scanning, and native forks for `save --as`.
-2. Add the interactive export picker.
+1. Add the interactive session picker for `export` and `save`.
 
 ## Open questions
 
 - Can encrypted Codex reasoning content and Claude thinking signatures be resumed under a different account or organization?
-- Which secret scanner is precise enough to block saves without frequent false alarms: built-in patterns, or gitleaks when installed?
 
 ## Modern history findings
 

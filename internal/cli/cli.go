@@ -69,6 +69,12 @@ func (a *App) Run(ctx context.Context, args []string) error {
 		return a.inspect(ctx, args[1:])
 	case "import":
 		return a.importArchive(ctx, args[1:])
+	case "save":
+		return a.save(ctx, args[1:])
+	case "open":
+		return a.open(ctx, args[1:])
+	case "status":
+		return a.status(ctx, args[1:])
 	case "doctor":
 		return a.doctor(ctx, args[1:])
 	default:
@@ -163,33 +169,16 @@ func (a *App) export(ctx context.Context, args []string) error {
 	if err != nil {
 		return usageOrHelp(err, "")
 	}
-	if len(positional) > 1 {
-		return &UsageError{Message: "export accepts at most one session selector"}
+	selector, err := sessionSelector(positional, *last, exportUsage)
+	if err != nil {
+		return err
 	}
-	selector := ""
-	if len(positional) == 1 {
-		selector = positional[0]
-	}
-	if selector == "" && !*last {
-		return &UsageError{Message: "export needs a SESSION or --last\n\n" + exportUsage}
-	}
-	if selector != "" && *last {
-		return &UsageError{Message: "SESSION and --last cannot be used together"}
-	}
-
 	stores, err := a.openStores(ctx)
 	if err != nil {
 		return err
 	}
 	defer stores.close()
-	sessions, err := a.sessions(stores, *includeAll)
-	if err != nil {
-		return err
-	}
-	session, err := selectSession(sessions, selector, *last)
-	if errors.Is(err, errNoMatch) && isSessionID(selector) {
-		session, err = stores.session(selector)
-	}
+	session, err := a.selectStoredSession(stores, selector, *last, *includeAll)
 	if err != nil {
 		return err
 	}
@@ -317,21 +306,27 @@ func (a *App) importArchive(ctx context.Context, args []string) error {
 		return err
 	}
 	defer store.Close()
-	result, err := store.Import(provider.ImportRequest{Archive: source, Workspace: workspace, Replace: *replace, DryRun: *dryRun})
+	return a.importInto(adapter, store, provider.ImportRequest{Archive: source, Workspace: workspace, Replace: *replace, DryRun: *dryRun}, *resume)
+}
+
+// importInto imports into store, reports the outcome and the command that
+// resumes the session, and runs that command when resume is set.
+func (a *App) importInto(adapter provider.Adapter, store provider.Store, request provider.ImportRequest, resume bool) error {
+	result, err := store.Import(request)
 	if err != nil {
 		return err
 	}
-	if _, err := fmt.Fprintln(a.Stdout, describeImport(adapter.Name, result, *dryRun)); err != nil {
+	if _, err := fmt.Fprintln(a.Stdout, describeImport(adapter.Name, result, request.DryRun)); err != nil {
 		return err
 	}
-	if *dryRun {
+	if request.DryRun {
 		return nil
 	}
 	resumeCommand := store.ResumeCommand(result.SessionID, result.Workspace)
 	if _, err := fmt.Fprintf(a.Stdout, "resume with: %s\n", displayCommand(resumeCommand)); err != nil {
 		return err
 	}
-	if !*resume {
+	if !resume {
 		return nil
 	}
 	resumeCommand.Stdin, resumeCommand.Stdout, resumeCommand.Stderr = a.Stdin, a.Stdout, a.Stderr
@@ -551,6 +546,38 @@ func (a *App) sessions(opened stores, includeAll bool) ([]provider.Session, erro
 	}
 	slices.SortStableFunc(sessions, func(a, b provider.Session) int { return b.UpdatedAt.Compare(a.UpdatedAt) })
 	return sessions, nil
+}
+
+// sessionSelector returns the session selector among positional, which
+// must hold one selector unless last is set.
+func sessionSelector(positional []string, last bool, commandUsage string) (string, error) {
+	switch {
+	case len(positional) > 1:
+		return "", &UsageError{Message: "at most one session selector is accepted"}
+	case len(positional) == 0 && !last:
+		return "", &UsageError{Message: "a SESSION or --last is required\n\n" + commandUsage}
+	case len(positional) == 1 && last:
+		return "", &UsageError{Message: "SESSION and --last cannot be used together"}
+	case len(positional) == 1:
+		return positional[0], nil
+	default:
+		return "", nil
+	}
+}
+
+// selectStoredSession selects a session of the current directory, or of
+// every directory with includeAll, by selector or as the latest one. A full
+// session ID is also looked up when no provider lists it.
+func (a *App) selectStoredSession(opened stores, selector string, last, includeAll bool) (provider.Session, error) {
+	sessions, err := a.sessions(opened, includeAll)
+	if err != nil {
+		return provider.Session{}, err
+	}
+	session, err := selectSession(sessions, selector, last)
+	if errors.Is(err, errNoMatch) && isSessionID(selector) {
+		session, err = opened.session(selector)
+	}
+	return session, err
 }
 
 // session looks up a full session ID in every store.

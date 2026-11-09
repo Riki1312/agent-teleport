@@ -240,27 +240,20 @@ func registered(home, sessionID string) bool {
 	return false
 }
 
+// runClaude runs agent-teleport against an isolated Claude Code home, with
+// Codex reported as not installed, and returns its stdout.
 func runClaude(t *testing.T, binary string, home claudeHome, stdin []byte, wantSuccess bool, args ...string) []byte {
 	t.Helper()
-	command := exec.Command(binary, args...)
-	command.Env = isolatedEnvironment(
-		"CLAUDE_CONFIG_DIR="+home.home,
-		claude.BinaryEnvironment+"="+home.binary,
+	return runIn(t, binary, home.agentTeleportEnvironment(), "", stdin, wantSuccess, args...)
+}
+
+// agentTeleportEnvironment runs agent-teleport against this home.
+func (h claudeHome) agentTeleportEnvironment() []string {
+	return isolatedEnvironment(
+		"CLAUDE_CONFIG_DIR="+h.home,
+		claude.BinaryEnvironment+"="+h.binary,
 		codex.BinaryEnvironment+"="+missingCommand,
 	)
-	if stdin != nil {
-		command.Stdin = bytes.NewReader(stdin)
-	}
-	var stdout, stderr bytes.Buffer
-	command.Stdout, command.Stderr = &stdout, &stderr
-	err := command.Run()
-	if wantSuccess && err != nil {
-		t.Fatalf("agent-teleport %s failed: %v: %s", strings.Join(args, " "), err, stderr.Bytes())
-	}
-	if !wantSuccess && err == nil {
-		t.Fatalf("agent-teleport %s unexpectedly succeeded", strings.Join(args, " "))
-	}
-	return stdout.Bytes()
 }
 
 func assertArchiveFiles(t *testing.T, path string, prefixes ...string) {

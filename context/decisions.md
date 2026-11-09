@@ -26,19 +26,25 @@ Each entry uses this shape:
 
 - `decision`: An archive holds one session with one identity. Sessions are never renamed or cloned, except through a provider's native fork.
 - `rationale`: Rewriting identifiers can leave inconsistent references inside provider state.
-- `impact`: A diverged session is either replaced explicitly or saved as a native fork.
+- `impact`: A diverged session is either replaced explicitly, or forked in its agent and saved under another name.
 
 ### Apply one fast-forward rule to every session update
 
-- `decision`: When a session already exists, compare the two copies. Identical copies succeed without changes, a longer incoming copy updates the existing one, and a longer local copy is kept. Diverged copies, or copies mapped to another workspace, fail unless the user passes `--replace` (`import`, `open`) or saves a native fork with `--as` (`save`).
+- `decision`: When a session already exists, compare the two copies. Identical copies succeed without changes, a longer incoming copy updates the existing one, and a longer local copy is kept. Diverged copies, or copies mapped to another workspace, fail unless the user passes `--replace` (`import`, `open`); `save` refuses them and explains how to open the saved copy or save a native fork.
 - `rationale`: Provider transcripts only grow at the end, so prefix comparison identifies safe updates without a collision policy.
 - `impact`: Repeated imports are safe. Each adapter applies the rule per thread or file.
 
 ### Keep sessions in repositories as unpacked archives
 
-- `decision`: Planned `save`, `open`, and `status` commands keep sessions under `.agent-teleport/sessions/<name>/` with the same manifest as a packed archive. Saved paths are relative to the repository root, each save records the Git commit and branch, and saving runs a secret scan that refuses findings unless explicitly accepted. There is no read-only rendering fallback.
-- `rationale`: Append-only JSONL produces small Git diffs, repository-relative paths avoid leaking machine paths, and committing a session publishes it to everyone with repository access.
-- `impact`: The manifest lists payload files, and workspace path rewriting must be complete and reversible.
+- `decision`: `save`, `open`, and `status` keep sessions under `.agent-teleport/sessions/<name>/` as unpacked archives with the same manifest as a packed one, plus the Git commit and branch of the save. Paths are made relative by moving the repository root to the placeholder `/agent-teleport/repository` and the provider's home to `/agent-teleport/home`; `open` moves them to the local checkout and agent. `save`, `open`, and `status` compare copies through a dry-run import. There is no read-only rendering fallback and no `save --as`: agent-teleport never creates session identities, and Claude Code forks only by sending a prompt.
+- `rationale`: Append-only JSONL produces small Git diffs, the placeholders keep the manifest valid while naming no machine path, and reusing import keeps one update rule.
+- `impact`: A saved directory is written beside the old one and swapped in with renames, so an interruption never leaves a mixed copy. The first save writes `.agent-teleport/.gitattributes`, which keeps sessions byte for byte and collapses their diffs in code review.
+
+### Refuse likely secrets before saving
+
+- `decision`: `save` scans what it adds to the repository, the new lines of grown files and every new file, with built-in patterns for unambiguous credential formats: private key blocks and AWS, GitHub, Anthropic, OpenAI, Slack, Google, and Stripe keys. JSON records are scanned by their decoded strings. Findings name the file, line, and rule but never the secret, and refuse the save unless `--allow-secrets` is passed.
+- `rationale`: Committing a session publishes it to everyone with repository access; distinctive formats rarely raise false alarms, and an external scanner would leave saves unprotected where it is not installed.
+- `impact`: Secrets without a distinctive format, such as passwords, are not detected. Credential-shaped test values are assembled at run time so that the repository holds none.
 
 ## Providers
 
