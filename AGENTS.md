@@ -16,7 +16,7 @@ This repository contains `agent-teleport`, a Go CLI that moves resumable coding-
 ## Context recovery
 
 - Read `context/current.md` at the start of a run and update it at the end.
-- Record durable decisions in `context/decisions.md`; keep it append-only and supersede old entries with new ones.
+- Record durable decisions in `context/decisions.md`; keep it current by editing or replacing entries whose decision changed.
 - Add `context/sessions/YYYY-MM-DD.md` only for substantial work.
 - Keep context notes short, current, and free of secrets.
 
