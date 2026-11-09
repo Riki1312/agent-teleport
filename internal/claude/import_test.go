@@ -375,3 +375,20 @@ func TestReadSessionUsesTheWorkspaceOfItsProjectFolder(t *testing.T) {
 	}
 	mustImport(t, testStore(t), exported, "/target", false, provider.Imported)
 }
+
+func TestExportOfTheCurrentSessionEndsBeforeItsTurn(t *testing.T) {
+	store := testStore(t)
+	mustImport(t, store, testArchive(t, "one", "two"), "/target", false, provider.Imported)
+	t.Setenv(sessionEnvironment, testSessionID)
+
+	// when
+	exported, err := store.Export(testSessionID, time.Now())
+
+	// then
+	if err != nil {
+		t.Fatal(err)
+	}
+	if transcript, _ := exported.Data(testSessionID + ".jsonl"); string(transcript) != string(lines(message("one", "/target"))) {
+		t.Fatalf("exported transcript =\n%s", transcript)
+	}
+}

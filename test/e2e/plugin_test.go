@@ -41,7 +41,7 @@ func TestPluginInstallsInCodex(t *testing.T) {
 	codexPath := requireCodex(t, buildAgentTeleport(t))
 	api := startScriptedResponses(t, nil)
 	home := t.TempDir()
-	api.configure(t, home)
+	api.configure(t, home, true)
 	environment := []string{"PATH=" + os.Getenv("PATH"), "HOME=" + filepath.Join(home, "user"), "CODEX_HOME=" + home}
 	runAgent(t, environment, codexPath, "plugin", "marketplace", "add", moduleRoot(t))
 	runAgent(t, environment, codexPath, "plugin", "add", "agent-teleport@agent-teleport")

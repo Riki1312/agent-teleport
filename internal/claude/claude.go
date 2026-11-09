@@ -171,8 +171,8 @@ func (s *Store) sessionFolder(id string) (string, error) {
 
 // Export snapshots a session into an archive stamped with createdAt: its
 // transcript, its sub-agent transcripts, and its saved tool outputs. While a
-// Claude Code process is working on a turn of the session, such as the one
-// running agent-teleport, the archive ends before that turn's prompt.
+// Claude Code process is working on a turn of the session, or the session
+// runs agent-teleport, the archive ends before that turn's prompt.
 func (s *Store) Export(id string, createdAt time.Time) (archive.Archive, error) {
 	folder, err := s.sessionFolder(id)
 	if err != nil {
@@ -186,7 +186,10 @@ func (s *Store) Export(id string, createdAt time.Time) (archive.Archive, error) 
 	if err != nil {
 		return archive.Archive{}, err
 	}
-	if open && live.Status != "idle" {
+	// A session that runs agent-teleport is always in a turn, even before
+	// Claude Code's registry reports it as busy.
+	current, inside := Current()
+	if (open && live.Status != "idle") || (inside && current == id) {
 		if session, err = session.withoutTurnInProgress(); err != nil {
 			return archive.Archive{}, fmt.Errorf("snapshot session %s: %w", id, err)
 		}

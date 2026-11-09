@@ -54,9 +54,11 @@ func startScriptedResponses(t *testing.T, commands map[string]string) *scriptedR
 }
 
 // configure writes a Codex configuration to home that uses the scripted API.
-func (r *scriptedResponses) configure(t *testing.T, home string) {
+// Plugins are disabled unless the test needs them, because Codex otherwise
+// syncs its remote plugin catalog in the background after a turn.
+func (r *scriptedResponses) configure(t *testing.T, home string, plugins bool) {
 	t.Helper()
-	config := fmt.Sprintf("model = \"scripted\"\nmodel_provider = \"scripted\"\n\n[model_providers.scripted]\nname = \"scripted\"\nbase_url = %q\nwire_api = \"responses\"\n", r.server.URL+"/v1")
+	config := fmt.Sprintf("model = \"scripted\"\nmodel_provider = \"scripted\"\n\n[model_providers.scripted]\nname = \"scripted\"\nbase_url = %q\nwire_api = \"responses\"\n\n[features]\nplugins = %t\n", r.server.URL+"/v1", plugins)
 	if err := os.WriteFile(filepath.Join(home, "config.toml"), []byte(config), 0o600); err != nil {
 		t.Fatal(err)
 	}

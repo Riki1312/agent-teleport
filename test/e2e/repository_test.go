@@ -218,7 +218,7 @@ func TestCodexSaveFromInsideASession(t *testing.T) {
 		"save this session": claude.BinaryEnvironment + "=" + missingCommand + " " + binary + " save --name native",
 	})
 	sourceHome := mkdir(t, filepath.Join(work, "source-home"))
-	api.configure(t, sourceHome)
+	api.configure(t, sourceHome, false)
 
 	sessionID := codexExec(t, codexPath, sourceHome, origin, "", "start the session")
 	codexExec(t, codexPath, sourceHome, origin, sessionID, "save this session")
@@ -242,7 +242,7 @@ func TestCodexSaveFromInsideASession(t *testing.T) {
 	clone, _ = filepath.EvalSymlinks(clone)
 	// Codex resumes a session only with its model provider configured.
 	targetHome := mkdir(t, filepath.Join(work, "target-home"))
-	api.configure(t, targetHome)
+	api.configure(t, targetHome, false)
 	assertOutput(t, runIn(t, binary, cleanEnvironment(targetHome, codexPath), clone, nil, true, "open", "native"), "imported Codex session")
 	assertResumed(t, codexPath, targetHome, sessionID, clone, 1)
 }
