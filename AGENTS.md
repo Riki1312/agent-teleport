@@ -1,21 +1,16 @@
 # agent-teleport
 
-This repository contains `cxport`, a small Go CLI for transferring resumable OpenAI
-Codex sessions between workstations.
+This repository contains `cxport`, a small Go CLI for transferring resumable OpenAI Codex sessions between workstations.
 
 ## Working principles
 
-- Work autonomously when the path is clear; ask before making a foundational choice
-  that is not recorded in the architecture or decisions log.
+- Work autonomously when the path is clear; ask before making a foundational choice that is not recorded in the architecture or decisions log.
 - Prefer the smallest design that is correct, observable, and easy to remove.
 - Treat Codex storage as an unstable provider detail. Unknown layouts fail closed.
 - Prefer supported Codex App Server behavior over direct SQLite mutation.
-- Keep archive and core concepts provider-neutral, but do not generalize beyond the
-  concrete Codex implementation without a second provider.
-- Treat session data as sensitive. Never print rollout content or store secrets in
-  tests, fixtures, logs, or `context/`.
-- Keep stdout machine-safe. Diagnostics belong on stderr, especially when exporting
-  an archive with `-o -`.
+- Keep archive and core concepts provider-neutral, but do not generalize beyond the concrete Codex implementation without a second provider.
+- Treat session data as sensitive. Never print rollout content or store secrets in tests, fixtures, logs, or `context/`.
+- Keep stdout machine-safe. Diagnostics belong on stderr, especially when exporting an archive with `-o -`.
 - Treat destructive or irreversible operations as explicit opt-ins.
 
 ## Context recovery
@@ -48,11 +43,8 @@ go vet ./...
 git diff --check
 ```
 
-Use sanitized fixtures only. Container tests must use isolated `CODEX_HOME` and
-workspace directories. Tests requiring Codex authentication or model calls must be
-explicit opt-in smoke tests, not ordinary pull-request gates.
+Use sanitized fixtures only. Container tests must use isolated `CODEX_HOME` and workspace directories. Tests requiring Codex authentication or model calls must be explicit opt-in smoke tests, not ordinary pull-request gates.
 
 ## Commits
 
-Use conventional commits: `feat:`, `fix:`, `refactor:`, `test:`, `docs:`, or
-`chore:`. Keep each commit focused on one logical change.
+Use conventional commits: `feat:`, `fix:`, `refactor:`, `test:`, `docs:`, or `chore:`. Keep each commit focused on one logical change.
