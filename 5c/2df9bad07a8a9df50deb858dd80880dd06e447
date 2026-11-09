@@ -1,0 +1,19 @@
+.golangci.yml
+  s_b3feabb7857cd3::t_76688d6791573a 1-26
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.2",
+  "base_commit_sha": "5c2df9bad07a8a9df50deb858dd80880dd06e447",
+  "prompts": {},
+  "sessions": {
+    "s_b3feabb7857cd3": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "fd1b6ebe-1b52-4a20-8b44-740169df5be6",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Riccardo <riki.brero@gmail.com>"
+    }
+  }
+}
