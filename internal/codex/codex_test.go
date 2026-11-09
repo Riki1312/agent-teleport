@@ -43,6 +43,84 @@ func TestValidateAndRemapWorkspace(t *testing.T) {
 	}
 }
 
+func TestRemapWorkspaceRoundTripsNativeFixture(t *testing.T) {
+	original, err := os.ReadFile(filepath.Join("..", "..", "testdata", "codex", testCompatibility.Version, "rollout.jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	source, err := testCompatibility.ValidateRollout(original)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// when
+	remapped, _, err := testCompatibility.RemapWorkspace(original, "/target/workspace")
+	if err != nil {
+		t.Fatal(err)
+	}
+	restored, _, err := testCompatibility.RemapWorkspace(remapped, source.CWD)
+
+	// then
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(restored, original) {
+		t.Fatal("remapping to another workspace and back changed the rollout")
+	}
+	originalLines := bytes.Split(original, []byte{'\n'})
+	for index, line := range bytes.Split(remapped, []byte{'\n'}) {
+		if len(line) == 0 {
+			continue
+		}
+		kind, err := classifyEvent(line)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, ok := testCompatibility.workspaceEvents[kind]; ok {
+			if bytes.Contains(line, []byte(source.CWD)) {
+				t.Fatalf("workspace metadata on line %d keeps the source workspace", index+1)
+			}
+		} else if !bytes.Equal(line, originalLines[index]) {
+			t.Fatalf("line %d is not workspace metadata but changed", index+1)
+		}
+	}
+}
+
+func TestRemapWorkspacePreservesUnrelatedBytes(t *testing.T) {
+	source := fixtureRollout("/source/workspace")
+	line := `{"type":"turn_context","payload":{"z":"<kept & exact>","cwd":"/source/workspace","roots":["/source/workspace/.git","/source/workspace-sibling"],"n":12345678901234567890}}`
+	source = bytes.Replace(source, []byte(`{"payload":{"cwd":"/source/workspace"},"type":"turn_context"}`), []byte(line), 1)
+
+	// when
+	remapped, _, err := testCompatibility.RemapWorkspace(source, "/target/workspace")
+
+	// then
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := `{"type":"turn_context","payload":{"z":"<kept & exact>","cwd":"/target/workspace","roots":["/target/workspace/.git","/source/workspace-sibling"],"n":12345678901234567890}}`
+	if !bytes.Contains(remapped, []byte(want+"\n")) {
+		t.Fatalf("remapped line changed unrelated bytes:\n%s", remapped)
+	}
+}
+
+func TestRemapWorkspaceRejectsUnsupportedPathForms(t *testing.T) {
+	source := bytes.Replace(
+		fixtureRollout("/source/workspace"),
+		[]byte(`{"payload":{"cwd":"/source/workspace"},"type":"turn_context"}`),
+		[]byte(`{"payload":{"cwd":"/source/workspace","uri":"file:///source/workspace"},"type":"turn_context"}`),
+		1,
+	)
+
+	// when
+	_, _, err := testCompatibility.RemapWorkspace(source, "/target/workspace")
+
+	// then
+	if err == nil || !strings.Contains(err.Error(), "unsupported form") {
+		t.Fatalf("RemapWorkspace error = %v", err)
+	}
+}
+
 func TestValidateRolloutRejectsIncompleteTurn(t *testing.T) {
 	source := fixtureRollout("/source/workspace")
 	lastLine := bytes.LastIndex(source[:len(source)-1], []byte{'\n'})

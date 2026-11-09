@@ -1,6 +1,8 @@
 package codex
 
 import (
+	"bytes"
+	"encoding/json"
 	"fmt"
 	"sort"
 	"strings"
@@ -69,19 +71,24 @@ func SupportedVersions() []string {
 	return versions
 }
 
-func (c Compatibility) isWorkspaceMetadata(event map[string]any) bool {
-	kind := classifyEvent(event)
-	_, ok := c.workspaceEvents[kind]
-	return ok
-}
-
-func (c Compatibility) isCompleteEvent(event map[string]any) bool {
-	return classifyEvent(event) == c.completeEvent
-}
-
-func classifyEvent(event map[string]any) eventKind {
-	eventType, _ := event["type"].(string)
-	payload, _ := event["payload"].(map[string]any)
-	payloadType, _ := payload["type"].(string)
-	return eventKind{eventType: eventType, payloadType: payloadType}
+// classifyEvent decodes only the event and payload types of one rollout line.
+func classifyEvent(line []byte) (eventKind, error) {
+	var event struct {
+		Type    string          `json:"type"`
+		Payload json.RawMessage `json:"payload"`
+	}
+	if err := json.Unmarshal(line, &event); err != nil {
+		return eventKind{}, err
+	}
+	kind := eventKind{eventType: event.Type}
+	if bytes.HasPrefix(bytes.TrimSpace(event.Payload), []byte{'{'}) {
+		var payload struct {
+			Type string `json:"type"`
+		}
+		if err := json.Unmarshal(event.Payload, &payload); err != nil {
+			return eventKind{}, err
+		}
+		kind.payloadType = payload.Type
+	}
+	return kind, nil
 }

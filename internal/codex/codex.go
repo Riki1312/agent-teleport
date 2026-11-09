@@ -122,11 +122,11 @@ func (c Compatibility) ValidateRollout(data []byte) (SessionMeta, error) {
 			return SessionMeta{}, fmt.Errorf("rollout line %d is not valid JSON", index+2)
 		}
 	}
-	var last map[string]any
-	if err := json.Unmarshal(lines[len(lines)-1], &last); err != nil {
+	last, err := classifyEvent(lines[len(lines)-1])
+	if err != nil {
 		return SessionMeta{}, fmt.Errorf("decode final rollout event: %w", err)
 	}
-	if !c.isCompleteEvent(last) {
+	if last != c.completeEvent {
 		return SessionMeta{}, errors.New("rollout does not end at a completed turn")
 	}
 	return SessionMeta{ID: id, CWD: first.Payload.CWD, Timestamp: timestamp}, nil
@@ -153,6 +153,10 @@ func validSessionID(id string) bool {
 	return true
 }
 
+// RemapWorkspace moves every workspace path in recognized metadata events from
+// the recorded workspace to targetCWD. Paths inside the workspace keep their
+// relative suffix. Only rewritten JSON strings change; all other bytes,
+// including recorded tool results, stay as recorded.
 func (c Compatibility) RemapWorkspace(data []byte, targetCWD string) ([]byte, SessionMeta, error) {
 	meta, err := c.ValidateRollout(data)
 	if err != nil {
@@ -167,22 +171,18 @@ func (c Compatibility) RemapWorkspace(data []byte, targetCWD string) ([]byte, Se
 		if len(line) == 0 {
 			continue
 		}
-		var event map[string]any
-		if err := json.Unmarshal(line, &event); err != nil {
+		kind, err := classifyEvent(line)
+		if err != nil {
 			return nil, SessionMeta{}, fmt.Errorf("decode rollout line %d: %w", index+1, err)
 		}
-		if !c.isWorkspaceMetadata(event) {
+		if _, ok := c.workspaceEvents[kind]; !ok {
 			continue
 		}
-		changed := remapCWDValues(event, meta.CWD, targetCWD)
-		if changed == 0 {
-			continue
-		}
-		encoded, err := json.Marshal(event)
+		rewritten, changed, err := remapPathStrings(line, meta.CWD, targetCWD)
 		if err != nil {
-			return nil, SessionMeta{}, fmt.Errorf("encode rollout line %d: %w", index+1, err)
+			return nil, SessionMeta{}, fmt.Errorf("remap rollout line %d: %w", index+1, err)
 		}
-		lines[index] = encoded
+		lines[index] = rewritten
 		remapped += changed
 	}
 	if remapped == 0 {
@@ -232,23 +232,92 @@ func ExistingRollouts(home, sessionID string) ([]string, error) {
 	return paths, nil
 }
 
-func remapCWDValues(value any, sourceCWD, targetCWD string) int {
-	remapped := 0
-	switch value := value.(type) {
-	case map[string]any:
-		for key, child := range value {
-			if key == "cwd" {
-				if cwd, ok := child.(string); ok && cwd == sourceCWD {
-					value[key] = targetCWD
-					remapped++
-				}
-			}
-			remapped += remapCWDValues(child, sourceCWD, targetCWD)
+// remapPathStrings rewrites each JSON string in line that is sourceCWD or a
+// path below it. A string that mentions sourceCWD in any other form fails
+// closed, because a partial remap would leave the session tied to the source.
+func remapPathStrings(line []byte, sourceCWD, targetCWD string) ([]byte, int, error) {
+	var output []byte
+	copied := 0
+	changed := 0
+	for start := 0; start < len(line); start++ {
+		if line[start] != '"' {
+			continue
 		}
-	case []any:
-		for _, child := range value {
-			remapped += remapCWDValues(child, sourceCWD, targetCWD)
+		end := stringTokenEnd(line, start)
+		if end < 0 {
+			return nil, 0, errors.New("unterminated JSON string")
+		}
+		token := line[start : end+1]
+		var value string
+		if err := json.Unmarshal(token, &value); err != nil {
+			return nil, 0, err
+		}
+		suffix, ok := strings.CutPrefix(value, sourceCWD)
+		if !ok || (suffix != "" && suffix[0] != '/') {
+			if mentionsPath(value, sourceCWD) {
+				return nil, 0, errors.New("workspace path appears in an unsupported form")
+			}
+			start = end
+			continue
+		}
+		encoded, err := encodeString(targetCWD + suffix)
+		if err != nil {
+			return nil, 0, err
+		}
+		output = append(output, line[copied:start]...)
+		output = append(output, encoded...)
+		copied = end + 1
+		changed++
+		start = end
+	}
+	if changed == 0 {
+		return line, 0, nil
+	}
+	return append(output, line[copied:]...), changed, nil
+}
+
+// stringTokenEnd returns the index of the quote closing the JSON string that
+// starts at start, or -1 when the string is unterminated.
+func stringTokenEnd(line []byte, start int) int {
+	for index := start + 1; index < len(line); index++ {
+		switch line[index] {
+		case '\\':
+			index++
+		case '"':
+			return index
 		}
 	}
-	return remapped
+	return -1
+}
+
+// mentionsPath reports whether value contains path followed by a path boundary.
+func mentionsPath(value, path string) bool {
+	for offset := 0; ; {
+		found := strings.Index(value[offset:], path)
+		if found < 0 {
+			return false
+		}
+		next := offset + found + len(path)
+		if next == len(value) || !isPathNameByte(value[next]) {
+			return true
+		}
+		offset = offset + found + 1
+	}
+}
+
+func isPathNameByte(character byte) bool {
+	return character == '.' || character == '_' || character == '-' ||
+		(character >= '0' && character <= '9') ||
+		(character >= 'a' && character <= 'z') ||
+		(character >= 'A' && character <= 'Z')
+}
+
+func encodeString(value string) ([]byte, error) {
+	var output bytes.Buffer
+	encoder := json.NewEncoder(&output)
+	encoder.SetEscapeHTML(false)
+	if err := encoder.Encode(value); err != nil {
+		return nil, err
+	}
+	return bytes.TrimSuffix(output.Bytes(), []byte{'\n'}), nil
 }
