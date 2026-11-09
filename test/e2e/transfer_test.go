@@ -55,16 +55,27 @@ func TestTwoHomeTransfer(t *testing.T) {
 	}
 	run(t, binary, codexPath, sourceHome, nil, true, "inspect", archivePath, "--json")
 
-	run(t, binary, codexPath, targetHome, nil, true,
-		"import", archivePath, "--cwd", targetAlias)
+	shortPath := filepath.Join(work, "short"+archive.Extension)
+	writeArchive(t, shortPath, version, fixture.ID, sourceCWD, completedPrefix(t, fixture.Data, 2))
+	divergedPath := filepath.Join(work, "diverged"+archive.Extension)
+	writeArchive(t, divergedPath, version, fixture.ID, sourceCWD, divergedCopy(t, fixture.Data))
+
+	assertOutput(t, run(t, binary, codexPath, targetHome, nil, true,
+		"import", shortPath, "--cwd", targetAlias), "imported")
 	assertListedCWD(t, run(t, binary, codexPath, targetHome, nil, true,
 		"list", "--all", "--json"), fixture.ID, targetCWD)
+	assertOutput(t, run(t, binary, codexPath, targetHome, nil, true,
+		"import", archivePath, "--cwd", targetCWD), "updated")
+	assertOutput(t, run(t, binary, codexPath, targetHome, nil, true,
+		"import", shortPath, "--cwd", targetCWD), "newer than the archive")
+	assertOutput(t, run(t, binary, codexPath, targetHome, nil, true,
+		"import", archivePath, "--cwd", targetCWD), "already up to date")
 	run(t, binary, codexPath, targetHome, nil, false,
-		"import", archivePath, "--cwd", targetCWD)
-	run(t, binary, codexPath, targetHome, nil, true,
-		"import", archivePath, "--cwd", targetCWD, "--if-exists", "skip")
-	run(t, binary, codexPath, targetHome, nil, true,
-		"import", archivePath, "--cwd", replacementCWD, "--if-exists", "replace")
+		"import", divergedPath, "--cwd", targetCWD)
+	run(t, binary, codexPath, targetHome, nil, false,
+		"import", archivePath, "--cwd", replacementCWD)
+	assertOutput(t, run(t, binary, codexPath, targetHome, nil, true,
+		"import", archivePath, "--cwd", replacementCWD, "--replace"), "replaced")
 	assertListedCWD(t, run(t, binary, codexPath, targetHome, nil, true,
 		"list", "--all", "--json"), fixture.ID, replacementCWD)
 
@@ -72,8 +83,8 @@ func TestTwoHomeTransfer(t *testing.T) {
 	if err := os.Link(destination, destination+".agent-teleport-rollback"); err != nil {
 		t.Fatalf("simulate interrupted replacement: %v", err)
 	}
-	run(t, binary, codexPath, targetHome, nil, true,
-		"import", archivePath, "--cwd", replacementCWD, "--if-exists", "replace")
+	assertOutput(t, run(t, binary, codexPath, targetHome, nil, true,
+		"import", archivePath, "--cwd", replacementCWD), "already up to date")
 	assertMissing(t, destination+".agent-teleport-rollback")
 	assertMissing(t, destination+".agent-teleport-stage")
 
@@ -89,9 +100,7 @@ func TestTwoHomeTransfer(t *testing.T) {
 	run(t, binary, codexPath, pipeHome, nil, false,
 		"import", archivePath, "--cwd", pipeCWD)
 	run(t, binary, codexPath, pipeHome, nil, false,
-		"import", archivePath, "--cwd", pipeCWD, "--if-exists", "replace")
-	run(t, binary, codexPath, pipeHome, nil, true,
-		"import", archivePath, "--cwd", pipeCWD, "--if-exists", "skip")
+		"import", archivePath, "--cwd", pipeCWD, "--replace")
 	if _, err := os.Stat(archived); err != nil {
 		t.Fatalf("import changed an archived session: %v", err)
 	}
@@ -146,20 +155,8 @@ func seedFixture(t *testing.T, binary, codexPath, version, work, home, cwd strin
 	if err := json.Unmarshal(firstLine, &first); err != nil {
 		t.Fatal(err)
 	}
-	fixtureArchive, err := archive.New(archive.Header{
-		Provider:        codex.Provider,
-		ProviderVersion: version,
-		SessionID:       first.Payload.ID,
-		Workspace:       first.Payload.CWD,
-		CreatedAt:       time.Now(),
-	}, []archive.Payload{{Path: "rollout.jsonl", Data: data}})
-	if err != nil {
-		t.Fatal(err)
-	}
 	archivePath := filepath.Join(work, "fixture"+archive.Extension)
-	if err := fixtureArchive.WriteFile(archivePath); err != nil {
-		t.Fatal(err)
-	}
+	writeArchive(t, archivePath, version, first.Payload.ID, first.Payload.CWD, data)
 	run(t, binary, codexPath, home, nil, true, "import", archivePath, "--cwd", cwd)
 	paths, err := filepath.Glob(filepath.Join(home, "sessions", "*", "*", "*", "rollout-*-"+first.Payload.ID+".jsonl"))
 	if err != nil || len(paths) != 1 {
@@ -170,6 +167,58 @@ func seedFixture(t *testing.T, binary, codexPath, version, work, home, cwd strin
 		t.Fatal(err)
 	}
 	return rolloutFixture{ID: first.Payload.ID, Path: paths[0], Data: stored}
+}
+
+func writeArchive(t *testing.T, path, version, sessionID, workspace string, rollout []byte) {
+	t.Helper()
+	created, err := archive.New(archive.Header{
+		Provider:        codex.Provider,
+		ProviderVersion: version,
+		SessionID:       sessionID,
+		Workspace:       workspace,
+		CreatedAt:       time.Now(),
+	}, []archive.Payload{{Path: "rollout.jsonl", Data: rollout}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := created.WriteFile(path); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// completedPrefix returns the rollout up to and including its turns-th
+// completed turn.
+func completedPrefix(t *testing.T, rollout []byte, turns int) []byte {
+	t.Helper()
+	end := 0
+	for line := range bytes.Lines(rollout) {
+		end += len(line)
+		if bytes.Contains(line, []byte(`"type":"task_complete"`)) {
+			if turns--; turns == 0 {
+				return rollout[:end]
+			}
+		}
+	}
+	t.Fatal("fixture has too few completed turns")
+	return nil
+}
+
+// divergedCopy returns the rollout with its first completed turn rewritten,
+// simulating a copy that continued differently on another machine.
+func divergedCopy(t *testing.T, rollout []byte) []byte {
+	t.Helper()
+	original := []byte("sanitized fixture text")
+	if !bytes.Contains(rollout, original) {
+		t.Fatal("fixture has no sanitized text to change")
+	}
+	return bytes.Replace(rollout, original, []byte("sanitized fixture TEXT"), 1)
+}
+
+func assertOutput(t *testing.T, output []byte, want string) {
+	t.Helper()
+	if !bytes.Contains(output, []byte(want)) {
+		t.Fatalf("output %q does not contain %q", output, want)
+	}
 }
 
 // requireCodex returns the installed Codex binary and version when the built

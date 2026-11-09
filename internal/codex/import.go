@@ -1,6 +1,7 @@
 package codex
 
 import (
+	"bytes"
 	"errors"
 	"fmt"
 	"os"
@@ -11,25 +12,14 @@ import (
 	"github.com/Riki1312/agent-teleport/internal/codex/appserver"
 )
 
-// CollisionPolicy decides what Import does when the session already exists.
-type CollisionPolicy string
-
-const (
-	// CollisionError fails without changing the existing session.
-	CollisionError CollisionPolicy = "error"
-	// CollisionSkip keeps the existing session and succeeds.
-	CollisionSkip CollisionPolicy = "skip"
-	// CollisionReplace replaces the existing session through a recoverable
-	// transaction.
-	CollisionReplace CollisionPolicy = "replace"
-)
-
 // ImportRequest describes one archive import.
 type ImportRequest struct {
 	Archive   archive.Archive
 	Workspace string
-	IfExists  CollisionPolicy
-	DryRun    bool
+	// Replace allows overwriting a local copy that has diverged from the
+	// archive, or that belongs to another workspace.
+	Replace bool
+	DryRun  bool
 }
 
 // ImportOutcome is what Import did, or would do in a dry run.
@@ -38,10 +28,14 @@ type ImportOutcome string
 const (
 	// Imported means the session was new and is now available.
 	Imported ImportOutcome = "imported"
-	// Replaced means an existing session was replaced.
+	// Updated means the archive extended the local copy, which now matches it.
+	Updated ImportOutcome = "updated"
+	// Unchanged means the local copy already matched the archive.
+	Unchanged ImportOutcome = "unchanged"
+	// KeptNewer means the local copy extends the archive and was kept.
+	KeptNewer ImportOutcome = "kept-newer"
+	// Replaced means a diverged local copy was replaced with the archive.
 	Replaced ImportOutcome = "replaced"
-	// Skipped means an existing session was kept unchanged.
-	Skipped ImportOutcome = "skipped"
 )
 
 // ImportResult reports the session an import produced.
@@ -52,138 +46,185 @@ type ImportResult struct {
 }
 
 // Import validates an archive for the installed Codex version, maps it to
-// request.Workspace, and makes it available through Codex. Nothing changes
+// request.Workspace, and makes it available through Codex. An existing copy of
+// the session is updated only when the archive extends it. Nothing changes
 // before validation succeeds, and a dry run never starts App Server.
 func (s *Store) Import(request ImportRequest) (ImportResult, error) {
-	sourceLayout, rollout, err := validateArchive(request.Archive)
+	rollout, meta, err := s.prepareRollout(request.Archive, request.Workspace)
 	if err != nil {
 		return ImportResult{}, err
 	}
-	if request.Archive.Manifest.ProviderVersion != s.version {
-		return ImportResult{}, fmt.Errorf("archive Codex version %s is incompatible with installed version %s", request.Archive.Manifest.ProviderVersion, s.version)
+	destination := rolloutPath(s.home, meta)
+	var client *appserver.Client
+	if request.DryRun {
+		pending, err := replacementPending(destination)
+		if err != nil {
+			return ImportResult{}, fmt.Errorf("inspect replacement recovery state: %w", err)
+		}
+		if pending {
+			return ImportResult{}, errors.New("an interrupted replacement requires recovery; rerun without --dry-run")
+		}
+	} else {
+		if client, err = s.appServer(); err != nil {
+			return ImportResult{}, err
+		}
+		if err := s.layout.recoverReplacement(destination, meta.ID, resetThread(client, meta.ID), repairThread(client)); err != nil {
+			return ImportResult{}, err
+		}
+	}
+	outcome, err := s.planImport(destination, rollout, meta, request.Replace)
+	if err != nil {
+		return ImportResult{}, err
+	}
+	result := ImportResult{SessionID: meta.ID, Workspace: meta.CWD, Outcome: outcome}
+	if request.DryRun {
+		return result, nil
+	}
+	switch outcome {
+	case Imported:
+		err = s.placeNew(client, destination, rollout, meta)
+	case Updated, Replaced:
+		err = s.replaceExisting(client, destination, rollout, meta)
+	}
+	if err != nil {
+		return ImportResult{}, err
+	}
+	return result, nil
+}
+
+// prepareRollout validates an archive for the installed Codex version and
+// returns its rollout mapped to workspace.
+func (s *Store) prepareRollout(source archive.Archive, workspace string) ([]byte, sessionMeta, error) {
+	sourceLayout, rollout, err := validateArchive(source)
+	if err != nil {
+		return nil, sessionMeta{}, err
+	}
+	if source.Manifest.ProviderVersion != s.version {
+		return nil, sessionMeta{}, fmt.Errorf("archive Codex version %s is incompatible with installed version %s", source.Manifest.ProviderVersion, s.version)
 	}
 	meta, err := sourceLayout.validateRollout(rollout)
 	if err != nil {
-		return ImportResult{}, err
+		return nil, sessionMeta{}, err
 	}
-	if request.Workspace != meta.CWD {
-		rollout, meta, err = s.layout.remapWorkspace(rollout, request.Workspace)
-		if err != nil {
-			return ImportResult{}, fmt.Errorf("remap workspace: %w", err)
-		}
+	if workspace == meta.CWD {
+		return rollout, meta, nil
 	}
-	destination := rolloutPath(s.home, meta)
-	result := ImportResult{SessionID: meta.ID, Workspace: meta.CWD, Outcome: Imported}
-	if request.DryRun {
-		return s.checkImport(destination, meta, request.IfExists, result)
-	}
-
-	client, err := s.appServer()
+	rollout, meta, err = s.layout.remapWorkspace(rollout, workspace)
 	if err != nil {
-		return ImportResult{}, err
+		return nil, sessionMeta{}, fmt.Errorf("remap workspace: %w", err)
 	}
-	reset := func() error { return client.Delete(meta.ID) }
-	repair := func(repaired sessionMeta) error { return verifyRepair(client, repaired.ID, repaired.CWD) }
-	if err := s.layout.recoverReplacement(destination, meta.ID, reset, repair); err != nil {
-		return ImportResult{}, err
-	}
+	return rollout, meta, nil
+}
+
+// planImport decides how to import rollout without changing local state.
+func (s *Store) planImport(destination string, rollout []byte, meta sessionMeta, replace bool) (ImportOutcome, error) {
 	existing, err := existingRollouts(s.home, meta.ID)
 	if err != nil {
-		return ImportResult{}, err
+		return "", err
 	}
-	if len(existing) > 0 {
-		return s.importExisting(client, request.IfExists, existing, destination, rollout, meta, result)
+	if len(existing) == 0 {
+		return Imported, nil
 	}
+	if err := requireReplaceable(existing, destination, meta.ID); err != nil {
+		return "", err
+	}
+	local, localMeta, err := s.layout.stableRollout(destination)
+	if err != nil {
+		return "", fmt.Errorf("read existing session %s: %w", meta.ID, err)
+	}
+	if localMeta.CWD != meta.CWD && !replace {
+		return "", fmt.Errorf("session %s already exists in %s; import there with --cwd, or pass --replace", meta.ID, localMeta.CWD)
+	}
+	switch compareHistories(local, rollout) {
+	case historiesEqual:
+		return Unchanged, nil
+	case incomingAhead:
+		return Updated, nil
+	case localAhead:
+		return KeptNewer, nil
+	}
+	if !replace {
+		return "", fmt.Errorf("session %s has diverged from the archive; pass --replace to overwrite the local copy", meta.ID)
+	}
+	return Replaced, nil
+}
+
+// historyComparison relates two copies of an append-only history.
+type historyComparison int
+
+const (
+	historiesEqual historyComparison = iota
+	incomingAhead
+	localAhead
+	historiesDiverged
+)
+
+// compareHistories relates two copies of the same session. Codex appends
+// rollout records only at the end, so a copy that starts with the other is the
+// same history with more turns.
+func compareHistories(local, incoming []byte) historyComparison {
+	switch {
+	case bytes.Equal(local, incoming):
+		return historiesEqual
+	case bytes.HasPrefix(incoming, local):
+		return incomingAhead
+	case bytes.HasPrefix(local, incoming):
+		return localAhead
+	default:
+		return historiesDiverged
+	}
+}
+
+// placeNew places the rollout of a new session and verifies its repair. A
+// failed verification deletes the new session again.
+func (s *Store) placeNew(client *appserver.Client, destination string, rollout []byte, meta sessionMeta) error {
 	if err := s.placeRollout(destination, rollout); err != nil {
-		return ImportResult{}, err
+		return err
 	}
 	if err := verifyRepair(client, meta.ID, meta.CWD); err != nil {
 		if cleanupErr := client.Delete(meta.ID); cleanupErr != nil {
-			return ImportResult{}, fmt.Errorf("repair imported session: %w; cleanup also failed: %v", err, cleanupErr)
+			return fmt.Errorf("repair imported session: %w; cleanup also failed: %v", err, cleanupErr)
 		}
-		return ImportResult{}, fmt.Errorf("repair imported session: %w", err)
+		return fmt.Errorf("repair imported session: %w", err)
 	}
-	return result, nil
+	return nil
 }
 
-// checkImport reports what Import would do without changing local state.
-func (s *Store) checkImport(destination string, meta sessionMeta, policy CollisionPolicy, result ImportResult) (ImportResult, error) {
-	pending, err := replacementPending(destination)
-	if err != nil {
-		return ImportResult{}, fmt.Errorf("inspect replacement recovery state: %w", err)
-	}
-	if pending {
-		return ImportResult{}, errors.New("an interrupted replacement requires recovery; rerun without --dry-run")
-	}
-	existing, err := existingRollouts(s.home, meta.ID)
-	if err != nil {
-		return ImportResult{}, err
-	}
-	if len(existing) == 0 {
-		return result, nil
-	}
-	switch policy {
-	case CollisionSkip:
-		result.Outcome = Skipped
-		return result, nil
-	case CollisionReplace:
-		if err := requireReplaceable(existing, destination, meta.ID); err != nil {
-			return ImportResult{}, err
-		}
-		result.Outcome = Replaced
-		return result, nil
-	default:
-		return ImportResult{}, fmt.Errorf("session %s already exists", meta.ID)
-	}
-}
-
-func (s *Store) importExisting(
-	client *appserver.Client,
-	policy CollisionPolicy,
-	existing []string,
-	destination string,
-	rollout []byte,
-	meta sessionMeta,
-	result ImportResult,
-) (ImportResult, error) {
-	switch policy {
-	case CollisionSkip:
-		result.Outcome = Skipped
-		return result, nil
-	case CollisionReplace:
-	default:
-		return ImportResult{}, fmt.Errorf("session %s already exists", meta.ID)
-	}
-	if err := requireReplaceable(existing, destination, meta.ID); err != nil {
-		return ImportResult{}, err
-	}
+// replaceExisting replaces a quiescent local session through the recoverable
+// replacement transaction.
+func (s *Store) replaceExisting(client *appserver.Client, destination string, rollout []byte, meta sessionMeta) error {
 	threads, err := client.List("", false)
 	if err != nil {
-		return ImportResult{}, fmt.Errorf("check existing session: %w", err)
+		return fmt.Errorf("check existing session: %w", err)
 	}
 	thread := findThread(threads, meta.ID)
 	if thread == nil {
-		return ImportResult{}, fmt.Errorf("Codex does not list existing session %s", meta.ID)
+		return fmt.Errorf("Codex does not list existing session %s", meta.ID)
 	}
 	if !isQuiescent(thread.Status.Type) {
-		return ImportResult{}, fmt.Errorf("existing session %s is not quiescent (status %q)", meta.ID, thread.Status.Type)
+		return fmt.Errorf("existing session %s is not quiescent (status %q)", meta.ID, thread.Status.Type)
 	}
-	reset := func() error { return client.Delete(meta.ID) }
-	repair := func(repaired sessionMeta) error { return verifyRepair(client, repaired.ID, repaired.CWD) }
-	if err := s.layout.replaceRollout(destination, rollout, meta, reset, repair, nil); err != nil {
-		return ImportResult{}, fmt.Errorf("replace session %s: %w", meta.ID, err)
+	if err := s.layout.replaceRollout(destination, rollout, meta, resetThread(client, meta.ID), repairThread(client), nil); err != nil {
+		return fmt.Errorf("replace session %s: %w", meta.ID, err)
 	}
-	result.Outcome = Replaced
-	return result, nil
+	return nil
 }
 
-// requireReplaceable allows replacement only for one active rollout at the
-// expected destination; archived or moved copies must be handled in Codex.
+func resetThread(client *appserver.Client, sessionID string) resetThreadFunc {
+	return func() error { return client.Delete(sessionID) }
+}
+
+func repairThread(client *appserver.Client) repairThreadFunc {
+	return func(meta sessionMeta) error { return verifyRepair(client, meta.ID, meta.CWD) }
+}
+
+// requireReplaceable allows updating only one active rollout at the expected
+// destination; archived or moved copies must be handled in Codex first.
 func requireReplaceable(existing []string, destination, sessionID string) error {
 	if len(existing) == 1 && filepath.Clean(existing[0]) == filepath.Clean(destination) {
 		return nil
 	}
-	return fmt.Errorf("session %s exists at %s; restore or delete it in Codex before replacing it", sessionID, strings.Join(existing, ", "))
+	return fmt.Errorf("session %s exists at %s; restore or delete it in Codex before importing it", sessionID, strings.Join(existing, ", "))
 }
 
 // placeRollout writes a new rollout through the stage file and links it into

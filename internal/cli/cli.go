@@ -80,7 +80,7 @@ const (
 	listUsage    = "Usage: agent-teleport list [--all] [--json]\n"
 	exportUsage  = "Usage: agent-teleport export [SESSION] [--all] [--last] [-o PATH|-]\n"
 	inspectUsage = "Usage: agent-teleport inspect <ARCHIVE|-> [--json]\n"
-	importUsage  = "Usage: agent-teleport import <ARCHIVE|-> [--cwd PATH | --preserve-cwd] [--if-exists error|skip|replace] [--dry-run] [--resume]\n"
+	importUsage  = "Usage: agent-teleport import <ARCHIVE|-> [--cwd PATH] [--replace] [--dry-run] [--resume]\n"
 	doctorUsage  = "Usage: agent-teleport doctor [--json]\n"
 )
 
@@ -255,60 +255,47 @@ func (a *App) checkImport(ctx context.Context, source archive.Archive) error {
 		return err
 	}
 	defer store.Close()
-	_, err = store.Import(codex.ImportRequest{Archive: source, Workspace: workspace, IfExists: codex.CollisionError, DryRun: true})
+	_, err = store.Import(codex.ImportRequest{Archive: source, Workspace: workspace, DryRun: true})
 	return err
 }
 
 func (a *App) importArchive(ctx context.Context, args []string) error {
 	set := newFlagSet("import")
 	cwd := set.String("cwd", "", "")
-	preserveCWD := set.Bool("preserve-cwd", false, "")
-	ifExists := set.String("if-exists", string(codex.CollisionError), "")
+	replace := set.Bool("replace", false, "")
 	dryRun := set.Bool("dry-run", false, "")
 	resume := set.Bool("resume", false, "")
 	positional, err := a.parse(set, args, importUsage)
 	if err != nil || len(positional) != 1 {
 		return usageOrHelp(err, "import requires exactly one archive path or -")
 	}
-	policy := codex.CollisionPolicy(*ifExists)
-	switch {
-	case *cwd != "" && *preserveCWD:
-		return &UsageError{Message: "--cwd and --preserve-cwd cannot be used together"}
-	case policy != codex.CollisionError && policy != codex.CollisionSkip && policy != codex.CollisionReplace:
-		return &UsageError{Message: "--if-exists must be error, skip, or replace"}
-	case *dryRun && *resume:
+	if *dryRun && *resume {
 		return &UsageError{Message: "--dry-run and --resume cannot be used together"}
 	}
-
 	source, err := a.readArchive(positional[0])
 	if err != nil {
 		return err
 	}
-	workspace := source.Manifest.Workspace
-	if !*preserveCWD {
-		workspace, err = targetWorkspace(*cwd)
-		if err != nil {
-			return fmt.Errorf("resolve target workspace: %w", err)
-		}
+	workspace, err := targetWorkspace(*cwd)
+	if err != nil {
+		return fmt.Errorf("resolve target workspace: %w", err)
 	}
 	store, err := codex.Open(ctx)
 	if err != nil {
 		return err
 	}
 	defer store.Close()
-	result, err := store.Import(codex.ImportRequest{Archive: source, Workspace: workspace, IfExists: policy, DryRun: *dryRun})
+	result, err := store.Import(codex.ImportRequest{Archive: source, Workspace: workspace, Replace: *replace, DryRun: *dryRun})
 	if err != nil {
 		return err
 	}
+	if _, err := fmt.Fprintln(a.Stdout, describeImport(result, *dryRun)); err != nil {
+		return err
+	}
 	if *dryRun {
-		_, err = fmt.Fprintf(a.Stdout, "would %s %s into %s\n", dryRunVerb(result.Outcome), result.SessionID, result.Workspace)
-		return err
+		return nil
 	}
-	if result.Outcome == codex.Skipped {
-		_, err = fmt.Fprintf(a.Stdout, "session %s already exists; skipped\n", result.SessionID)
-		return err
-	}
-	if _, err := fmt.Fprintf(a.Stdout, "%s %s into %s\nresume with: codex resume %s\n", result.Outcome, result.SessionID, result.Workspace, result.SessionID); err != nil {
+	if _, err := fmt.Fprintf(a.Stdout, "resume with: codex resume %s\n", result.SessionID); err != nil {
 		return err
 	}
 	if !*resume {
@@ -322,15 +309,29 @@ func (a *App) importArchive(ctx context.Context, args []string) error {
 	return nil
 }
 
-func dryRunVerb(outcome codex.ImportOutcome) string {
-	switch outcome {
-	case codex.Replaced:
-		return "replace"
-	case codex.Skipped:
-		return "skip"
-	default:
-		return "import"
+// describeImport returns the one-line summary of an import outcome.
+func describeImport(result codex.ImportResult, dryRun bool) string {
+	formats := importSummaries
+	if dryRun {
+		formats = dryRunSummaries
 	}
+	return fmt.Sprintf(formats[result.Outcome], result.SessionID, result.Workspace)
+}
+
+var importSummaries = map[codex.ImportOutcome]string{
+	codex.Imported:  "imported Codex session %s into %s",
+	codex.Updated:   "updated Codex session %s in %s",
+	codex.Replaced:  "replaced Codex session %s in %s",
+	codex.Unchanged: "Codex session %s is already up to date in %s",
+	codex.KeptNewer: "kept Codex session %s in %s: the local copy is newer than the archive",
+}
+
+var dryRunSummaries = map[codex.ImportOutcome]string{
+	codex.Imported:  "would import Codex session %s into %s",
+	codex.Updated:   "would update Codex session %s in %s",
+	codex.Replaced:  "would replace Codex session %s in %s",
+	codex.Unchanged: "Codex session %s is already up to date in %s",
+	codex.KeptNewer: "would keep Codex session %s in %s: the local copy is newer than the archive",
 }
 
 // doctorReport is the JSON representation of doctor output.
