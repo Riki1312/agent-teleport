@@ -64,24 +64,24 @@ func (a *App) Run(ctx context.Context, args []string) error {
 	}
 }
 
-const usage = `Usage: cxport <command> [options]
+const usage = `Usage: agent-teleport <command> [options]
 
 Commands:
   list       List Codex sessions
-  export     Export one session to a .cxport archive
+  export     Export one session to a .teleport archive
   inspect    Validate and describe an archive
   import     Import an archive into the local Codex store
   doctor     Check local Codex compatibility
 
-Run "cxport <command> --help" for command options.
+Run "agent-teleport <command> --help" for command options.
 `
 
 const (
-	listUsage    = "Usage: cxport list [--all] [--json]\n"
-	exportUsage  = "Usage: cxport export [SESSION] [--all] [--last] [-o PATH|-]\n"
-	inspectUsage = "Usage: cxport inspect <ARCHIVE|-> [--json]\n"
-	importUsage  = "Usage: cxport import <ARCHIVE|-> [--cwd PATH | --preserve-cwd] [--if-exists error|skip|replace] [--dry-run] [--resume]\n"
-	doctorUsage  = "Usage: cxport doctor [--json]\n"
+	listUsage    = "Usage: agent-teleport list [--all] [--json]\n"
+	exportUsage  = "Usage: agent-teleport export [SESSION] [--all] [--last] [-o PATH|-]\n"
+	inspectUsage = "Usage: agent-teleport inspect <ARCHIVE|-> [--json]\n"
+	importUsage  = "Usage: agent-teleport import <ARCHIVE|-> [--cwd PATH | --preserve-cwd] [--if-exists error|skip|replace] [--dry-run] [--resume]\n"
+	doctorUsage  = "Usage: agent-teleport doctor [--json]\n"
 )
 
 // errHelp reports that a command printed its help and should succeed.

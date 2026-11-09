@@ -16,4 +16,4 @@ test:
 	go test ./...
 
 e2e:
-	CXPORT_E2E_REQUIRED=1 go test -count=1 -v ./test/e2e
+	AGENT_TELEPORT_E2E_REQUIRED=1 go test -count=1 -v ./test/e2e

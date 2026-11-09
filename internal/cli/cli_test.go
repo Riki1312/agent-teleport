@@ -28,12 +28,12 @@ func TestParseAcceptsFlagsBetweenArguments(t *testing.T) {
 
 func TestImportRejectsInvalidOptionsBeforeReadingArchive(t *testing.T) {
 	for _, arguments := range [][]string{
-		{"import", "session.cxport", "--cwd", "/target", "--preserve-cwd"},
-		{"import", "session.cxport", "--dry-run", "--resume"},
-		{"import", "session.cxport", "--if-exists", "overwrite"},
+		{"import", "session.teleport", "--cwd", "/target", "--preserve-cwd"},
+		{"import", "session.teleport", "--dry-run", "--resume"},
+		{"import", "session.teleport", "--if-exists", "overwrite"},
 		{"import"},
-		{"import", "one.cxport", "two.cxport"},
-		{"import", "session.cxport", "--unknown"},
+		{"import", "one.teleport", "two.teleport"},
+		{"import", "session.teleport", "--unknown"},
 	} {
 		app := &App{Stdout: &bytes.Buffer{}, Stderr: &bytes.Buffer{}}
 

@@ -242,7 +242,7 @@ func TestExistingRolloutsIncludesArchivedSessions(t *testing.T) {
 	active := filepath.Join(home, "sessions", "2026", "09", "13", name)
 	archived := filepath.Join(home, "archived_sessions", name)
 	unrelated := filepath.Join(home, "sessions", "2026", "09", "13", "rollout-2026-09-13T09-58-44-01999999-3333-7777-8888-444444444444.jsonl")
-	for _, path := range []string{active, archived, unrelated, active + ".cxport-rollback"} {
+	for _, path := range []string{active, archived, unrelated, active + ".agent-teleport-rollback"} {
 		if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 			t.Fatal(err)
 		}

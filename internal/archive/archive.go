@@ -29,7 +29,7 @@ const Format = "agent-teleport"
 const FormatVersion = 1
 
 // Extension is the file extension of packed archives.
-const Extension = ".cxport"
+const Extension = ".teleport"
 
 const (
 	manifestPath    = "manifest.json"

@@ -25,7 +25,7 @@ import (
 const Provider = "openai-codex"
 
 // BinaryEnvironment names the variable that overrides the Codex binary path.
-const BinaryEnvironment = "CXPORT_CODEX"
+const BinaryEnvironment = "AGENT_TELEPORT_CODEX"
 
 // rolloutPayload is the archive path of a session's rollout file.
 const rolloutPayload = "rollout.jsonl"

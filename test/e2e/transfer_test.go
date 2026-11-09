@@ -19,7 +19,7 @@ import (
 )
 
 func TestTwoHomeTransfer(t *testing.T) {
-	binary := buildCXPort(t)
+	binary := buildAgentTeleport(t)
 	codexPath, version := requireCodex(t, binary)
 	work := testWorkDir(t)
 	sourceHome := mkdir(t, filepath.Join(work, "source-home"))
@@ -38,7 +38,7 @@ func TestTwoHomeTransfer(t *testing.T) {
 	assertListedCWD(t, run(t, binary, codexPath, sourceHome, nil, true,
 		"list", "--all", "--json"), fixture.ID, sourceCWD)
 
-	archivePath := filepath.Join(work, "session.cxport")
+	archivePath := filepath.Join(work, "session.teleport")
 	run(t, binary, codexPath, sourceHome, nil, true,
 		"export", "--all", fixture.ID, "-o", archivePath)
 	archiveFile, err := os.Open(archivePath)
@@ -69,13 +69,13 @@ func TestTwoHomeTransfer(t *testing.T) {
 		"list", "--all", "--json"), fixture.ID, replacementCWD)
 
 	destination := filepath.Join(targetHome, strings.TrimPrefix(fixture.Path, sourceHome))
-	if err := os.Link(destination, destination+".cxport-rollback"); err != nil {
+	if err := os.Link(destination, destination+".agent-teleport-rollback"); err != nil {
 		t.Fatalf("simulate interrupted replacement: %v", err)
 	}
 	run(t, binary, codexPath, targetHome, nil, true,
 		"import", archivePath, "--cwd", replacementCWD, "--if-exists", "replace")
-	assertMissing(t, destination+".cxport-rollback")
-	assertMissing(t, destination+".cxport-stage")
+	assertMissing(t, destination+".agent-teleport-rollback")
+	assertMissing(t, destination+".agent-teleport-stage")
 
 	exported := run(t, binary, codexPath, sourceHome, nil, true,
 		"export", "--all", fixture.ID, "-o", "-")
@@ -197,20 +197,20 @@ func requireCodex(t *testing.T, binary string) (string, string) {
 
 func skipOrFail(t *testing.T, reason string) {
 	t.Helper()
-	if os.Getenv("CXPORT_E2E_REQUIRED") == "1" {
+	if os.Getenv("AGENT_TELEPORT_E2E_REQUIRED") == "1" {
 		t.Fatal(reason)
 	}
 	t.Skip(reason)
 }
 
-func buildCXPort(t *testing.T) string {
+func buildAgentTeleport(t *testing.T) string {
 	t.Helper()
-	binary := filepath.Join(t.TempDir(), "cxport")
-	command := exec.Command("go", "build", "-o", binary, "./cmd/cxport")
+	binary := filepath.Join(t.TempDir(), "agent-teleport")
+	command := exec.Command("go", "build", "-o", binary, "./cmd/agent-teleport")
 	command.Dir = moduleRoot(t)
 	command.Env = append(os.Environ(), "GOCACHE="+filepath.Join(t.TempDir(), "go-build"))
 	if output, err := command.CombinedOutput(); err != nil {
-		t.Fatalf("build cxport: %v: %s", err, output)
+		t.Fatalf("build agent-teleport: %v: %s", err, output)
 	}
 	return binary
 }
@@ -227,7 +227,7 @@ func moduleRoot(t *testing.T) string {
 func testWorkDir(t *testing.T) string {
 	t.Helper()
 	path := t.TempDir()
-	if value := os.Getenv("CXPORT_E2E_WORKDIR"); value != "" {
+	if value := os.Getenv("AGENT_TELEPORT_E2E_WORKDIR"); value != "" {
 		path = mkdir(t, value)
 	}
 	resolved, err := filepath.EvalSymlinks(path)
@@ -263,10 +263,10 @@ func run(
 	command.Stderr = &stderr
 	err := command.Run()
 	if wantSuccess && err != nil {
-		t.Fatalf("cxport %s failed: %v: %s", strings.Join(args, " "), err, stderr.Bytes())
+		t.Fatalf("agent-teleport %s failed: %v: %s", strings.Join(args, " "), err, stderr.Bytes())
 	}
 	if !wantSuccess && err == nil {
-		t.Fatalf("cxport %s unexpectedly succeeded", strings.Join(args, " "))
+		t.Fatalf("agent-teleport %s unexpectedly succeeded", strings.Join(args, " "))
 	}
 	return stdout.Bytes()
 }

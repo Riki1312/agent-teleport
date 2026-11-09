@@ -194,7 +194,7 @@ const clientVersion = "0.0.0"
 func (c *Client) initialize() error {
 	_, err := c.call("initialize", map[string]any{
 		"clientInfo": map[string]string{
-			"name":    "cxport",
+			"name":    "agent-teleport",
 			"title":   "agent-teleport",
 			"version": clientVersion,
 		},

@@ -16,7 +16,7 @@ func main() {
 	defer stop()
 	app := cli.New()
 	if err := app.Run(ctx, os.Args[1:]); err != nil {
-		fmt.Fprintln(os.Stderr, "cxport:", err)
+		fmt.Fprintln(os.Stderr, "agent-teleport:", err)
 		var usageError *cli.UsageError
 		if errors.As(err, &usageError) {
 			os.Exit(2)

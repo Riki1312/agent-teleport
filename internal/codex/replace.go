@@ -253,11 +253,11 @@ func removeIfExists(path string) error {
 }
 
 func stagePath(destination string) string {
-	return destination + ".cxport-stage"
+	return destination + ".agent-teleport-stage"
 }
 
 func rollbackPath(destination string) string {
-	return destination + ".cxport-rollback"
+	return destination + ".agent-teleport-rollback"
 }
 
 // isMissingRollout reports whether Codex rejected a delete because the thread no
