@@ -1,0 +1,54 @@
+internal/cli/cli.go
+  s_b3feabb7857cd3::t_1b6b74247004c4 74-82,179-181,470
+internal/codex/history.go
+  s_b3feabb7857cd3::t_925e94a90ce062 1-278
+internal/codex/rollout.go
+  s_b3feabb7857cd3::t_5f2504507f70ca 20-22,25-33,36,39,43,47,50,52,55-58,63,69-73,83,95-97,109-117,120,124-125,127-128,131-148,151,178-179,185-202,204,206-207,217,222,224,226,228,233,244-245,254,280-281
+internal/codex/codex.go
+  s_b3feabb7857cd3::t_462888a21259f5 114,119-147,149-150,158,162,172,226-227,229,233,235,237,239,241,244,246
+test/e2e/transfer_test.go
+  s_b3feabb7857cd3::t_beb737735bc417 122-123
+  s_b3feabb7857cd3::t_1b6b74247004c4 53,59,61,108-121,124-127,157-203,206,216-217,233-234,244-245,248-249,253-254,257
+internal/codex/appserver/client.go
+  s_b3feabb7857cd3::t_1b6b74247004c4 199-204
+  s_b3feabb7857cd3::t_cc1687d7073731 69-73,169-170,172-176
+testdata/codex/README.md
+  s_b3feabb7857cd3::t_19c1ed4f58d09e 1,3-6
+internal/cli/help.go
+  s_b3feabb7857cd3::t_1b6b74247004c4 38-39
+ARCHITECTURE.md
+  s_b3feabb7857cd3::t_05076e5a772692 78-89,123-125,132-136,156
+internal/codex/replace.go
+  s_b3feabb7857cd3::t_58c1e5918caf25 79,86,170,201-208
+internal/codex/rollout_test.go
+  s_b3feabb7857cd3::t_2d014489c86f90 46,213,257
+internal/codex/import.go
+  s_b3feabb7857cd3::t_929c6e57514c02 50-53,55,59-60,64-68,81,84,88,92,96-100,103,105,113-116,118,121,123,125,127-155,158,163-169,171,175-177,180,186,190-193,195-198,204,206,208,210-212,214-221,230,262-265,268-269,279-280,285-286,288-289,298-299,328-335,340,348,352-371,375-387,392-400
+  s_b3feabb7857cd3::t_180fc84d9b46a5 156-157,159-162
+testdata/codex/rollout-2026-11-09T13-05-32-01a1c033-0a38-7d43-a289-532721dea6d7.jsonl
+  s_b3feabb7857cd3::t_19c1ed4f58d09e 1-2
+internal/codex/history_test.go
+  s_b3feabb7857cd3::t_2d014489c86f90 1-187
+context/current.md
+  s_b3feabb7857cd3::t_05076e5a772692 19-20,24-26,47-50
+README.md
+  s_b3feabb7857cd3::t_05076e5a772692 38
+context/decisions.md
+  s_b3feabb7857cd3::t_05076e5a772692 63,65-67
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.2",
+  "base_commit_sha": "3473198bebea50b3012ce0ed7dc1b47380b8cfc3",
+  "prompts": {},
+  "sessions": {
+    "s_b3feabb7857cd3": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "fd1b6ebe-1b52-4a20-8b44-740169df5be6",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Riccardo <riki.brero@gmail.com>"
+    }
+  }
+}
