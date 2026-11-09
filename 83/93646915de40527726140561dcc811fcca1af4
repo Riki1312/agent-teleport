@@ -1,0 +1,61 @@
+internal/codex/codex.go
+  s_b3feabb7857cd3::t_c1ae91e5b4c1af 33-40,112,191
+  s_b3feabb7857cd3::t_ac7602670ec551 66-74,92,176,186,188,222
+testdata/codex/README.md
+  s_b3feabb7857cd3::t_9fa9bd73b26016 1,3
+README.md
+  s_b3feabb7857cd3::t_d1835a03b1b8b7 9
+internal/codex/layout.go
+  s_b3feabb7857cd3::t_4b61759b35147c 80-82,154
+  s_b3feabb7857cd3::t_cd38c02fc1421b 7,18,20-29,35-46,56-61,63-68,70,78-79,104-153
+internal/codex/replace.go
+  s_b3feabb7857cd3::t_110a29d7b98753 244-250,252,256
+internal/codex/rollout_test.go
+  s_b3feabb7857cd3::t_9fa9bd73b26016 16,47,107,111-132,140-162,268-273,279,285,295,301-302,306,308,311-312
+internal/cli/cli.go
+  s_b3feabb7857cd3::t_c96c34deb0101c 336-343,355-361,375,379-389
+.github/workflows/ci.yml
+  s_b3feabb7857cd3::t_d98c460b82ca5b 40-43,53
+internal/codex/import.go
+  s_b3feabb7857cd3::t_ac7602670ec551 58-65,68,78-80,82,109-110,126-141,143-145,147,150-151
+  s_b3feabb7857cd3::t_c1ae91e5b4c1af 218,272,280
+internal/codex/layout_test.go
+  s_b3feabb7857cd3::t_9fa9bd73b26016 8-23,25-41
+internal/codex/replace_test.go
+  s_b3feabb7857cd3::t_9fa9bd73b26016 68,157-159
+test/e2e/transfer_test.go
+  s_b3feabb7857cd3::t_518b1dcc7f4272 23,36,59,61,135-138,141-143,145,152-154,161,171,226-228,246
+ARCHITECTURE.md
+  s_b3feabb7857cd3::t_d1835a03b1b8b7 74,109-110,118,120-121,141,143,175
+internal/codex/appserver/client.go
+  s_b3feabb7857cd3::t_c1ae91e5b4c1af 107-120,129-132,134-135
+context/current.md
+  s_b3feabb7857cd3::t_d1835a03b1b8b7 6,18-19,23,42-45
+  s_b3feabb7857cd3::t_38955372592705 16
+tools/sanitize-fixture/main.go
+  s_b3feabb7857cd3::t_52a86447854393 137-139,164-165
+  s_b3feabb7857cd3::t_25adad4336d7a5 2-5,10,16,20-26,35,38-45,47,49-53,59-66,68,70,75,77-78,80-81,83,86-104,111,115,117-118,123-130,140-144,146-151,153-155,157,159,161,163,166-169
+  s_b3feabb7857cd3::t_b4adf5040f1239 134-136,180-186
+internal/codex/rollout.go
+  s_b3feabb7857cd3::t_110a29d7b98753 96,104-114,116-117,147-151,160-162,176,180-183,194-195,197-199,202-216,218-225,227,233-242,247-256,259,262-266,270-271,274,279,281,284-285,288,303-330
+context/decisions.md
+  s_b3feabb7857cd3::t_d1835a03b1b8b7 47-49,59,77-78,83-84
+testdata/codex/rollout.jsonl
+  s_b3feabb7857cd3::t_9fa9bd73b26016 1-51
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.2",
+  "base_commit_sha": "8393646915de40527726140561dcc811fcca1af4",
+  "prompts": {},
+  "sessions": {
+    "s_b3feabb7857cd3": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "fd1b6ebe-1b52-4a20-8b44-740169df5be6",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Riccardo <riki.brero@gmail.com>"
+    }
+  }
+}
