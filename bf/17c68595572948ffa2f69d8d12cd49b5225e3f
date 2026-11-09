@@ -1,0 +1,23 @@
+test/e2e/transfer_test.go
+  s_b3feabb7857cd3::t_481fcb2e2f53db 120-122
+context/current.md
+  s_b3feabb7857cd3::t_481fcb2e2f53db 46-47
+internal/codex/appserver/client.go
+  s_b3feabb7857cd3::t_481fcb2e2f53db 35-38
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.2",
+  "base_commit_sha": "bf17c68595572948ffa2f69d8d12cd49b5225e3f",
+  "prompts": {},
+  "sessions": {
+    "s_b3feabb7857cd3": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "fd1b6ebe-1b52-4a20-8b44-740169df5be6",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Riccardo <riki.brero@gmail.com>"
+    }
+  }
+}
