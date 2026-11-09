@@ -1,0 +1,41 @@
+internal/cli/cli.go
+  s_b3feabb7857cd3::t_ef9af89f78fca5 67,71,76,80-84
+internal/codex/replace.go
+  s_b3feabb7857cd3::t_ef9af89f78fca5 256,260
+test/e2e/transfer_test.go
+  s_b3feabb7857cd3::t_ef9af89f78fca5 22,41,72,77-78,200,206,208-209,213,230,266,269
+Makefile
+  s_b3feabb7857cd3::t_ef9af89f78fca5 19
+internal/codex/appserver/client.go
+  s_b3feabb7857cd3::t_ef9af89f78fca5 197
+.gitignore
+  s_b3feabb7857cd3::t_ef9af89f78fca5 2,7
+cmd/agent-teleport/main.go
+  s_b3feabb7857cd3::t_ef9af89f78fca5 1-26
+internal/cli/cli_test.go
+  s_b3feabb7857cd3::t_ef9af89f78fca5 31-33,35-36
+internal/codex/codex.go
+  s_b3feabb7857cd3::t_ef9af89f78fca5 28
+internal/codex/rollout_test.go
+  s_b3feabb7857cd3::t_ef9af89f78fca5 245
+.github/workflows/ci.yml
+  s_b3feabb7857cd3::t_ef9af89f78fca5 44
+internal/archive/archive.go
+  s_b3feabb7857cd3::t_ef9af89f78fca5 32
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.2",
+  "base_commit_sha": "72b43399e6900513ffd1a87adfa640a4ab400a16",
+  "prompts": {},
+  "sessions": {
+    "s_b3feabb7857cd3": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "fd1b6ebe-1b52-4a20-8b44-740169df5be6",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Riccardo <riki.brero@gmail.com>"
+    }
+  }
+}
