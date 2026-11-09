@@ -1,0 +1,21 @@
+internal/cli/cli_test.go
+  s_b3feabb7857cd3::t_ac88d072a7a317 3-7,41-76
+internal/cli/cli.go
+  s_b3feabb7857cd3::t_ac88d072a7a317 4,192-195,197-198,203,740-745,747-748,750,753-759,762,764-766,768-769,772-773
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.2",
+  "base_commit_sha": "b710d6be33a60d3c7cf0da939c83a361385b42c5",
+  "prompts": {},
+  "sessions": {
+    "s_b3feabb7857cd3": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "fd1b6ebe-1b52-4a20-8b44-740169df5be6",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Riccardo <riki.brero@gmail.com>"
+    }
+  }
+}
