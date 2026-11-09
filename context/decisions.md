@@ -165,3 +165,38 @@ Chronological implementation detail belongs in `sessions/`.
   adapter need their own design and portable, sanitized end-to-end coverage.
 - `evidence`: `context/current.md`, `internal/codex/codex_test.go`,
   `internal/cli/workspace_test.go`, and `test/e2e/transfer_test.go`.
+
+### 2026-11-09 - Rename the CLI to agent-teleport with automatic provider detection
+
+- `decision`: Ship one `agent-teleport` binary for every provider. Archives use the `.teleport` extension. Commands detect the provider from the session or archive instead of asking for it.
+- `rationale`: Claude Code is a concrete second provider; one binary and one command vocabulary are simpler than one binary per provider.
+- `impact`: Supersedes the `cxport`, `.cxport`, and future `clport` naming. `list` shows sessions from every installed provider.
+- `evidence`: `ARCHITECTURE.md`, `README.md`.
+
+### 2026-11-09 - Apply one fast-forward rule to every session update
+
+- `decision`: When a session already exists, `import`, `open`, and `save` compare the two copies. Identical copies succeed without changes, a longer incoming copy updates the existing one, and a longer local copy is kept. Diverged copies fail unless the user passes `--replace` (`import`, `open`) or saves a native fork with `--as` (`save`).
+- `rationale`: Provider transcripts only grow at the end, so prefix comparison identifies safe updates without a collision policy flag.
+- `impact`: Replaces `--if-exists error|skip|replace`. Replacement keeps its recoverable rollback transaction.
+- `evidence`: `ARCHITECTURE.md`.
+
+### 2026-11-09 - Keep sessions in repositories as unpacked directories
+
+- `decision`: Planned `save`, `open`, and `status` commands keep sessions under `.agent-teleport/sessions/<name>/` with the same manifest as a packed archive. Saved paths are relative to the repository root, and each save records the current Git commit and branch. Saving runs a secret scan and refuses findings unless explicitly accepted. There is no read-only rendering fallback.
+- `rationale`: Append-only JSONL produces small Git diffs, repository-relative paths avoid leaking machine paths, and committing session data publishes it to everyone with repository access.
+- `impact`: The archive manifest lists payload files so packed and unpacked sessions share one format. Workspace path rewriting must be complete and reversible.
+- `evidence`: `ARCHITECTURE.md`.
+
+### 2026-11-09 - Support recent provider versions without migrations
+
+- `decision`: Support the latest and recent provider versions, verified in CI. Drop older versions, their fixtures, and their code once newer support lands. Unreleased archive formats change without migration paths.
+- `rationale`: Nothing has been released, and carrying unused compatibility paths costs more than it protects.
+- `impact`: Codex 0.154.0 support is removed when the latest Codex is supported. The manifest changes in place within format version 1.
+- `evidence`: `context/current.md`.
+
+### 2026-11-09 - Enforce Markdown formatting and doc comments
+
+- `decision`: Format Markdown with a pinned Prettier through `npx`, with prose left unwrapped. Require doc comments on exported Go identifiers, enforced by golangci-lint.
+- `rationale`: Unwrapped prose produces clean diffs; doc comments keep the package boundaries explicit as the provider set grows.
+- `impact`: CI checks formatting, lint, tests, and the native Codex E2E. Node is a development-only requirement.
+- `evidence`: `.github/workflows/ci.yml`, `.golangci.yml`, `.prettierrc.json`.
