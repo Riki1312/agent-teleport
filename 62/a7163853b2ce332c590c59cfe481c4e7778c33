@@ -1,0 +1,27 @@
+test/e2e/repository_test.go
+  s_b3feabb7857cd3::t_a519d9719d3df4 221,245
+test/e2e/plugin_test.go
+  s_b3feabb7857cd3::t_a519d9719d3df4 44
+internal/claude/import_test.go
+  ai_agent 378-394
+internal/claude/claude.go
+  s_b3feabb7857cd3::t_a519d9719d3df4 174-175,189-192
+test/e2e/codex_api_test.go
+  s_b3feabb7857cd3::t_a519d9719d3df4 57-59,61
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.2",
+  "base_commit_sha": "62a7163853b2ce332c590c59cfe481c4e7778c33",
+  "prompts": {},
+  "sessions": {
+    "s_b3feabb7857cd3": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "fd1b6ebe-1b52-4a20-8b44-740169df5be6",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Riccardo <riki.brero@gmail.com>"
+    }
+  }
+}
