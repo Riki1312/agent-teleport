@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -188,14 +189,18 @@ func (a *App) export(ctx context.Context, args []string) error {
 	if output == "" {
 		output = defaultArchiveName(thread)
 	}
+	encoded, err := encodeArchive(manifest, rollout)
+	if err != nil {
+		return err
+	}
 	if output == "-" {
-		if err := writeBundleToStdout(a.Stdout, manifest, rollout); err != nil {
-			return err
+		if _, err := a.Stdout.Write(encoded); err != nil {
+			return fmt.Errorf("write archive to stdout: %w", err)
 		}
 		_, err = fmt.Fprintf(a.Stderr, "exported %s\n", thread.ID)
 		return err
 	}
-	if err := writeBundleFile(output, manifest, rollout); err != nil {
+	if err := writeNewFile(output, encoded); err != nil {
 		return err
 	}
 	_, err = fmt.Fprintf(a.Stdout, "exported %s to %s\n", thread.ID, output)
@@ -732,89 +737,40 @@ func defaultArchiveName(thread appserver.Thread) string {
 	return fmt.Sprintf("%s-%s.cxport", base, shortID)
 }
 
-func writeBundleToStdout(output io.Writer, manifest bundle.Manifest, rollout []byte) error {
-	temporary, err := os.CreateTemp("", "cxport-export-*.cxport")
-	if err != nil {
-		return fmt.Errorf("create temporary archive: %w", err)
+// encodeArchive builds and verifies the complete archive before any output is
+// written, so a failed export never emits a partial archive.
+func encodeArchive(manifest bundle.Manifest, rollout []byte) ([]byte, error) {
+	var encoded bytes.Buffer
+	if err := bundle.Write(&encoded, manifest, rollout); err != nil {
+		return nil, err
 	}
-	path := temporary.Name()
-	defer os.Remove(path)
-	if err := temporary.Chmod(0o600); err != nil {
-		temporary.Close()
-		return err
+	if _, err := bundle.Read(bytes.NewReader(encoded.Bytes())); err != nil {
+		return nil, fmt.Errorf("verify completed archive: %w", err)
 	}
-	if err := bundle.Write(temporary, manifest, rollout); err != nil {
-		temporary.Close()
-		return err
-	}
-	if err := temporary.Sync(); err != nil {
-		temporary.Close()
-		return err
-	}
-	if _, err := temporary.Seek(0, io.SeekStart); err != nil {
-		temporary.Close()
-		return err
-	}
-	if _, err := bundle.Read(temporary); err != nil {
-		temporary.Close()
-		return fmt.Errorf("verify completed archive: %w", err)
-	}
-	if _, err := temporary.Seek(0, io.SeekStart); err != nil {
-		temporary.Close()
-		return err
-	}
-	_, copyErr := io.Copy(output, temporary)
-	closeErr := temporary.Close()
-	if copyErr != nil {
-		return copyErr
-	}
-	return closeErr
+	return encoded.Bytes(), nil
 }
 
-func writeBundleFile(path string, manifest bundle.Manifest, rollout []byte) error {
-	absolute, err := filepath.Abs(path)
+// writeNewFile creates path with owner-only permissions without replacing an
+// existing file. It avoids hard links, which removable FAT and exFAT drives
+// do not support, and removes the file again when writing fails.
+func writeNewFile(path string, data []byte) error {
+	file, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
+	if errors.Is(err, os.ErrExist) {
+		return fmt.Errorf("output already exists: %s", path)
+	}
 	if err != nil {
-		return fmt.Errorf("resolve output path: %w", err)
+		return fmt.Errorf("create archive: %w", err)
 	}
-	directory := filepath.Dir(absolute)
-	temporary, err := os.CreateTemp(directory, ".cxport-export-*")
+	_, err = file.Write(data)
+	if err == nil {
+		err = file.Sync()
+	}
+	if closeErr := file.Close(); err == nil {
+		err = closeErr
+	}
 	if err != nil {
-		return fmt.Errorf("create staged archive: %w", err)
-	}
-	temporaryPath := temporary.Name()
-	defer os.Remove(temporaryPath)
-	if err := temporary.Chmod(0o600); err != nil {
-		temporary.Close()
-		return err
-	}
-	if err := bundle.Write(temporary, manifest, rollout); err != nil {
-		temporary.Close()
-		return err
-	}
-	if err := temporary.Sync(); err != nil {
-		temporary.Close()
-		return err
-	}
-	if err := temporary.Close(); err != nil {
-		return err
-	}
-	verify, err := os.Open(temporaryPath)
-	if err != nil {
-		return err
-	}
-	_, verifyErr := bundle.Read(verify)
-	closeErr := verify.Close()
-	if verifyErr != nil {
-		return fmt.Errorf("verify completed archive: %w", verifyErr)
-	}
-	if closeErr != nil {
-		return closeErr
-	}
-	if err := os.Link(temporaryPath, absolute); err != nil {
-		if errors.Is(err, os.ErrExist) {
-			return fmt.Errorf("output already exists: %s", path)
-		}
-		return fmt.Errorf("commit archive: %w", err)
+		_ = os.Remove(path)
+		return fmt.Errorf("write archive: %w", err)
 	}
 	return nil
 }

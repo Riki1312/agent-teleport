@@ -1,6 +1,10 @@
 package cli
 
-import "testing"
+import (
+	"os"
+	"path/filepath"
+	"testing"
+)
 
 func TestParseExportInterspersedOptions(t *testing.T) {
 	options, err := parseExport([]string{"session-id", "-o", "session.cxport", "--all"})
@@ -32,5 +36,43 @@ func TestParseImportAcceptsReplace(t *testing.T) {
 	}
 	if options.ifExists != collisionReplace {
 		t.Fatalf("ifExists = %q", options.ifExists)
+	}
+}
+
+func TestWriteNewFileKeepsExistingOutput(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "session.cxport")
+	if err := os.WriteFile(path, []byte("existing"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	// when
+	err := writeNewFile(path, []byte("replacement"))
+
+	// then
+	if err == nil {
+		t.Fatal("writeNewFile replaced an existing file")
+	}
+	data, readErr := os.ReadFile(path)
+	if readErr != nil || string(data) != "existing" {
+		t.Fatalf("existing output changed: %q, %v", data, readErr)
+	}
+}
+
+func TestWriteNewFileUsesOwnerOnlyPermissions(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "session.cxport")
+
+	// when
+	err := writeNewFile(path, []byte("archive"))
+
+	// then
+	if err != nil {
+		t.Fatal(err)
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Mode().Perm() != 0o600 {
+		t.Fatalf("permissions = %v, want 0600", info.Mode().Perm())
 	}
 }
