@@ -37,10 +37,14 @@ jobs:
       fail-fast: false
       matrix:
         os: [ubuntu-latest, macos-latest]
-        # The supported range of Codex versions; keep in sync with
-        # internal/codex/layout.go.
-        codex: [0.165.0, 0.166.0, 0.167.0]
-    name: test (${{ matrix.os }}, Codex ${{ matrix.codex }})
+        # Each job pairs one version of every provider, covering the
+        # supported ranges in internal/codex/layout.go and
+        # internal/claude/layout.go.
+        agents:
+          - { codex: 0.165.0, claude: 2.1.317 }
+          - { codex: 0.166.0, claude: 2.1.318 }
+          - { codex: 0.167.0, claude: 2.1.319 }
+    name: test (${{ matrix.os }}, Codex ${{ matrix.agents.codex }}, Claude Code ${{ matrix.agents.claude }})
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v7
@@ -50,7 +54,7 @@ jobs:
       - uses: actions/setup-node@v7
         with:
           node-version: lts/*
-      - run: npm install --global @openai/codex@${{ matrix.codex }}
+      - run: npm install --global @openai/codex@${{ matrix.agents.codex }} @anthropic-ai/claude-code@${{ matrix.agents.claude }}
       - run: go test -count=1 ./...
         env:
           AGENT_TELEPORT_E2E_REQUIRED: "1"

@@ -21,12 +21,13 @@ import (
 
 	"github.com/Riki1312/agent-teleport/internal/archive"
 	"github.com/Riki1312/agent-teleport/internal/buildinfo"
+	"github.com/Riki1312/agent-teleport/internal/claude"
 	"github.com/Riki1312/agent-teleport/internal/codex"
 	"github.com/Riki1312/agent-teleport/internal/provider"
 )
 
 // adapters lists every supported provider in display order.
-var adapters = []provider.Adapter{codex.Adapter}
+var adapters = []provider.Adapter{codex.Adapter, claude.Adapter}
 
 // App runs commands against injectable standard streams and clock.
 type App struct {

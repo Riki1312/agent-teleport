@@ -4,7 +4,7 @@
 
 ## Scope
 
-The CLI is a single CGO-free Go binary, `agent-teleport`, for Linux and macOS. OpenAI Codex is the implemented provider; Claude Code is the next one. Commands detect the provider from the session or archive, so users never name it.
+The CLI is a single CGO-free Go binary, `agent-teleport`, for Linux and macOS. It supports OpenAI Codex and Claude Code. Commands detect the provider from the session or archive, so users never name it: `list` and `export` consult every installed provider, and `import` and `inspect` use the provider named in the manifest.
 
 Goals:
 
@@ -23,7 +23,7 @@ Non-goals:
 
 ## Fidelity model
 
-A transfer is lossless with respect to the recorded provider event stream: an archive stores the provider's files unchanged. Importing into another workspace rewrites workspace paths in the metadata events that the provider reads when it rebuilds session state, and nothing else. Recorded tool calls and their results stay as recorded, so a resumed session may refer to paths, tools, or permissions that differ on the destination machine.
+A transfer is lossless with respect to the recorded provider event stream: an archive stores the provider's files unchanged. Importing into another workspace rewrites workspace paths in the metadata records that the provider reads when it rebuilds session state or replays its environment, and nothing else. Recorded tool calls and their results stay as recorded, so a resumed session may refer to paths, tools, or permissions that differ on the destination machine.
 
 ## Commands
 
@@ -60,7 +60,7 @@ Provider transcripts only grow at the end, so two copies of one session either m
 | Local extends incoming | The local session is kept; the command succeeds. |
 | Diverged, or mapped to another workspace | The command fails unless `--replace` is given. |
 
-The rule applies to every thread of a session separately. Updates append the incoming records; replacements use the recoverable replacement transaction described below. A session that is open in the agent is never updated.
+The rule applies to every file or thread of a session separately; each adapter below describes how it updates and replaces them. A session that is open in the agent is never changed.
 
 ## Archive format
 
@@ -74,6 +74,7 @@ A packed archive is a gzip-compressed tar file with the `.teleport` extension. I
   "provider_version": "0.167.0",
   "session_id": "01a09a34-754a-7343-8d40-37a2af117f2f",
   "workspace": "/home/alice/src/example",
+  "home": "/home/alice/.codex",
   "created_at": "2026-11-09T09:58:44Z",
   "files": [
     {
@@ -90,6 +91,7 @@ A packed archive is a gzip-compressed tar file with the `.teleport` extension. I
 }
 ```
 
+- `home` is the provider's storage directory on the source machine, for providers that record paths into it.
 - Payload paths are clean, relative, and slash-separated; the provider chooses them.
 - Decoding rejects unknown manifest fields, unsupported format versions, unlisted or missing entries, links and other non-regular files, size limit violations, and digest mismatches.
 - Digests detect accidental corruption. They are not signatures and do not establish who created an archive.
@@ -102,14 +104,19 @@ The format is unreleased, so it changes in place without migrations until the fi
 ```text
 cmd/agent-teleport        process entry point
 internal/cli              argument parsing, session selection, output
+internal/provider         provider-neutral sessions, import outcomes, adapters
 internal/archive          provider-neutral manifest, packing, validation
 internal/codex            Codex adapter: discovery, export, import, repair
 internal/codex/appserver  JSON-RPC client for codex app-server --stdio
+internal/claude           Claude Code adapter: discovery, export, import
+internal/pathmap          reversible workspace path rewriting in JSON records
+internal/fsutil           stable reads and atomic writes
+internal/semver           provider version ordering
 internal/buildinfo        build version
 tools/sanitize-fixture    produces sanitized Codex fixtures
 ```
 
-The CLI operates on archives and plain session values. Provider paths, event shapes, version rules, and state repair stay inside the provider adapter. A provider interface will be extracted from the Codex and Claude Code adapters once both exist, rather than designed in advance.
+The CLI operates on archives and plain session values through `provider.Adapter` and `provider.Store`, which were extracted from the two adapters. Provider paths, record shapes, version rules, and state repair stay inside each adapter.
 
 ## Codex adapter
 
@@ -168,6 +175,31 @@ Each rollout layout covers a range of Codex versions: its turn boundary events, 
 
 Codex App Server forks a thread natively with `thread/fork`, which repository sessions will use for `save --as`.
 
+## Claude Code adapter
+
+Claude Code keeps each session as an append-only JSONL transcript, `projects/<folder>/<session>.jsonl`, under its configuration directory (`CLAUDE_CONFIG_DIR`, by default `~/.claude`). The folder is named after the workspace the session started in: every UTF-16 code unit other than an ASCII letter or digit becomes `-`, and a name longer than 200 characters is cut to 200 and suffixed with `-` and a base-36 hash of the path. Beside the transcript, the session folder `<session>/` holds sub-agent transcripts and metadata in `subagents/` and tool outputs too large for the transcript in `tool-results/`. Rewinds are branches of the record tree inside the same transcript, and a native fork is a separate, self-contained session.
+
+Claude Code has no index and no server: it resumes a session by finding its transcript in any project folder, appends to it in place, and keeps a registry of running processes in `sessions/<pid>.json`. The adapter therefore reads and writes the files directly and never touches other Claude Code state.
+
+### Export
+
+1. List sessions from the transcripts of the workspace's project folder, or of every folder with `--all`, reading only complete records. A session's title is its custom title, else its generated title, else its first prompt.
+2. Refuse a session that a running Claude Code process reports as anything but idle.
+3. Read the transcript and every file of the session folder, failing if a file changed during the read or is not part of the known layout. Every record must belong to the session, and every sub-agent record to its agent.
+4. Build the archive with the payload paths relative to the project folder. File history backups are project files and are not exported.
+
+### Import
+
+1. Validate the archive and require the archive's Claude Code version and the installed version to share a transcript layout.
+2. Move two directories: the source workspace to the target workspace, and the source project folder to the target's, which the recorded system prompt names as the memory folder. In every transcript record the working directory moves, and in environment attachments (`environment`, `instructions`, and `prompt_snapshot`) every mention at path boundaries moves; Claude Code replays these when it resumes, so the model sees only target paths. Messages, tool calls, tool results, and request logs stay as recorded, so saved tool outputs keep their source paths. The rewrite must be reversible.
+3. Compare every file with the local copy in the target's project folder. Transcripts follow the update rule by prefix; tool outputs must match; sub-agent metadata follows the rest of the session. A copy in another project folder is moved only with `--replace`.
+4. Refuse any change while a running process has the session open. The registry is checked, not locked, so a Claude Code process that starts during an import is not detected.
+5. Write each file to a stage file and rename it into place, the transcript last, then remove the files a replacement drops and verify the result.
+
+### Supported versions
+
+The current layout starts at Claude Code 2.1.317 and is tested through 2.1.319, with the same rules as Codex: older versions fail closed, newer versions are accepted with a `doctor` warning, and structural validation rejects unknown files.
+
 ## Repository sessions (planned)
 
 Sessions will also be kept in a repository, next to the code they discuss:
@@ -192,13 +224,15 @@ Session histories can contain prompts, model output, commands, tool results, fil
 - Archives and staged files use owner-only permissions.
 - No command prints session content; `inspect --json` reports metadata only.
 - Import validates everything before it changes local state and never extracts into an agent's store directly.
-- Replacing a diverged session requires `--replace` and keeps a recoverable rollback until the replacement is verified.
+- Replacing a diverged session requires `--replace`; Codex replacements keep a recoverable rollback until they are verified.
 - Encryption and signing are candidates for a later format version.
 
 ## Testing
 
-- Unit tests cover archive validation, rollout validation and remapping, the update rule, replacement recovery, and CLI parsing.
-- A two-home end-to-end test drives the built binary against a native Codex CLI and a sanitized fixture, without credentials or model calls: export, inspect, piped transfer, every update outcome, replacement recovery, archived sessions, and resume after repair. CI installs every tested Codex version on Linux and macOS and requires this test against each.
+- Unit tests cover archive validation, rollout and transcript validation, path remapping, the update rule, replacement recovery, and CLI parsing.
+- A Codex two-home end-to-end test drives the built binary against a native Codex CLI and sanitized fixtures, without credentials or model calls: export, inspect, piped transfer, every update outcome, replacement recovery, archived sessions, forks, reverts, sub-agents, and resume after repair.
+- A Claude Code two-home end-to-end test records sessions with the native Claude Code CLI against a scripted local Messages API, so it needs no credentials and makes no model calls: sub-agents, saved tool outputs, every update outcome, open and busy sessions, moves between workspaces, a hashed project folder, and resumes whose requests must name only target paths.
+- CI installs every tested version of both providers on Linux and macOS and requires both tests against each.
 - Tests that need authentication or model calls are opt-in smoke tests, never pull-request gates.
 
 ## Design principles

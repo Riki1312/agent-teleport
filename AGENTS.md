@@ -1,6 +1,6 @@
 # agent-teleport
 
-This repository contains `agent-teleport`, a Go CLI that moves resumable coding-agent sessions between workstations and, in planned work, into repositories. OpenAI Codex is the implemented provider; Claude Code is next.
+This repository contains `agent-teleport`, a Go CLI that moves resumable coding-agent sessions between workstations and, in planned work, into repositories. OpenAI Codex and Claude Code are the implemented providers.
 
 ## Working principles
 
@@ -38,9 +38,9 @@ Run the checks relevant to the change; before committing, normally run:
 make check
 ```
 
-It runs golangci-lint, the Go tests, the Prettier check, and `git diff --check`. Use `make format` to apply gofmt and Prettier. `make e2e` requires the two-home test against an installed, supported Codex CLI, as CI does; the test otherwise skips.
+It runs golangci-lint, the Go tests, the Prettier check, and `git diff --check`. Use `make format` to apply gofmt and Prettier. `make e2e` requires the two-home tests against installed, supported Codex and Claude Code CLIs, as CI does; each test otherwise skips.
 
-Use sanitized fixtures only, produced with `tools/sanitize-fixture` and reviewed manually. End-to-end tests use isolated agent homes and workspaces. Tests that need authentication or model calls are explicit opt-in smoke tests, never pull-request gates.
+Use sanitized fixtures only, produced with `tools/sanitize-fixture` and reviewed manually, or sessions recorded during a test against a scripted local API. End-to-end tests use isolated agent homes and workspaces. Tests that need authentication or model calls are explicit opt-in smoke tests, never pull-request gates.
 
 ## Commits
 

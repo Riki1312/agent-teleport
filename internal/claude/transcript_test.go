@@ -1,0 +1,183 @@
+package claude
+
+import (
+	"strings"
+	"testing"
+
+	"github.com/Riki1312/agent-teleport/internal/pathmap"
+)
+
+const testSessionID = "6f5fb979-80ed-48da-8688-9ee51a3bd400"
+
+func TestProjectFolderNameReplacesEveryOtherCharacter(t *testing.T) {
+	// when
+	name := projectFolderName("/Users/me/My Project_é😀")
+
+	// then
+	if want := "-Users-me-My-Project----"; name != want {
+		t.Fatalf("projectFolderName() = %q, want %q", name, want)
+	}
+}
+
+func TestProjectFolderNameHashesLongWorkspaces(t *testing.T) {
+	workspace := "/work/" + strings.Repeat("nested-directory-", 12) + "project/é😀"
+
+	// when
+	name := projectFolderName(workspace)
+
+	// then
+	want := projectFolderName(workspace[:len(workspace)-len("é😀")])[:maxProjectFolderName] + "-tyszp5"
+	if name != want {
+		t.Fatalf("projectFolderName() = %q, want %q", name, want)
+	}
+}
+
+func TestParseTranscriptSummarizesTheSession(t *testing.T) {
+	transcript := lines(
+		`{"type":"queue-operation","sessionId":"`+testSessionID+`"}`,
+		`{"type":"user","isMeta":true,"message":{"role":"user","content":"meta"},"cwd":"/work/project","sessionId":"`+testSessionID+`","timestamp":"2026-11-09T10:00:00.000Z"}`,
+		`{"type":"user","message":{"role":"user","content":[{"type":"text","text":"fix   the\nbuild"}]},"cwd":"/work/project","sessionId":"`+testSessionID+`","timestamp":"2026-11-09T10:00:01.000Z"}`,
+		`{"type":"assistant","message":{"role":"assistant","content":[]},"cwd":"/work/project/sub","sessionId":"`+testSessionID+`","timestamp":"2026-11-09T10:05:00.000Z"}`,
+		`{"type":"file-history-snapshot","messageId":"m"}`,
+	)
+
+	// when
+	info, err := parseTranscript(transcript, testSessionID, "")
+
+	// then
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.workspace != "/work/project" || info.title != "fix the build" || info.updatedAt.Minute() != 5 {
+		t.Fatalf("parseTranscript() = %+v", info)
+	}
+}
+
+func TestParseTranscriptPrefersCustomThenGeneratedTitles(t *testing.T) {
+	message := `{"type":"user","message":{"role":"user","content":"prompt"},"cwd":"/w","sessionId":"` + testSessionID + `"}`
+	for _, test := range []struct {
+		records []string
+		want    string
+	}{
+		{records: []string{message, `{"type":"ai-title","aiTitle":"Generated"}`}, want: "Generated"},
+		{records: []string{`{"type":"custom-title","customTitle":"Mine"}`, message, `{"type":"ai-title","aiTitle":"Generated"}`}, want: "Mine"},
+	} {
+		// when
+		info, err := parseTranscript(lines(test.records...), testSessionID, "")
+
+		// then
+		if err != nil || info.title != test.want {
+			t.Fatalf("parseTranscript() title = %q, %v; want %q", info.title, err, test.want)
+		}
+	}
+}
+
+func TestParseTranscriptRejectsInconsistentTranscripts(t *testing.T) {
+	message := `{"type":"user","message":{"role":"user","content":"p"},"cwd":"/w","sessionId":"` + testSessionID + `","agentId":"a1"}`
+	for name, test := range map[string]struct {
+		data  []byte
+		agent string
+	}{
+		"empty":                   {data: nil},
+		"incomplete final record": {data: []byte(message)},
+		"invalid JSON":            {data: lines(message, `{`)},
+		"other session":           {data: lines(strings.Replace(message, testSessionID, "11111111-1111-1111-1111-111111111111", 1))},
+		"other agent":             {data: lines(message), agent: "a2"},
+		"no messages":             {data: lines(`{"type":"queue-operation","sessionId":"` + testSessionID + `","cwd":"/w"}`)},
+		"no working directory":    {data: lines(strings.Replace(message, `"cwd":"/w",`, "", 1))},
+	} {
+		t.Run(name, func(t *testing.T) {
+			// when
+			_, err := parseTranscript(test.data, testSessionID, test.agent)
+
+			// then
+			if err == nil {
+				t.Fatal("parseTranscript() succeeded")
+			}
+		})
+	}
+}
+
+func TestCompleteRecordsDropsARecordBeingWritten(t *testing.T) {
+	// when
+	complete := completeRecords([]byte("{\"a\":1}\n{\"b\""))
+
+	// then
+	if string(complete) != "{\"a\":1}\n" {
+		t.Fatalf("completeRecords() = %q", complete)
+	}
+}
+
+func TestRemapTranscriptMovesOnlyWorkspaceMetadata(t *testing.T) {
+	mapping, err := pathmap.New(
+		pathmap.Move{From: "/work/project", To: "/target"},
+		pathmap.Move{From: "/home/a/.claude/projects/-work-project", To: "/home/b/.claude/projects/-target"},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	transcript := lines(
+		`{"type":"user","message":{"role":"user","content":"read /work/project/a"},"cwd":"/work/project"}`,
+		`{"type":"attachment","attachment":{"type":"environment","snapshot":"{\"workingDirectory\":\"/work/project\"}"},"rendered":[{"content":"cwd: /work/project"}],"cwd":"/work/project"}`,
+		`{"type":"attachment","attachment":{"type":"prompt_snapshot","systemPrompt":"memory at /home/a/.claude/projects/-work-project/memory/"},"cwd":"/work/project"}`,
+		`{"type":"attachment","attachment":{"type":"file","filename":"/work/project/a"},"cwd":"/work/project"}`,
+	)
+
+	// when
+	remapped, err := layouts[0].remapTranscript(transcript, mapping)
+
+	// then
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := lines(
+		`{"type":"user","message":{"role":"user","content":"read /work/project/a"},"cwd":"/target"}`,
+		`{"type":"attachment","attachment":{"type":"environment","snapshot":"{\"workingDirectory\":\"/target\"}"},"rendered":[{"content":"cwd: /target"}],"cwd":"/target"}`,
+		`{"type":"attachment","attachment":{"type":"prompt_snapshot","systemPrompt":"memory at /home/b/.claude/projects/-target/memory/"},"cwd":"/target"}`,
+		`{"type":"attachment","attachment":{"type":"file","filename":"/work/project/a"},"cwd":"/target"}`,
+	)
+	if string(remapped) != string(want) {
+		t.Fatalf("remapTranscript() =\n%s\nwant\n%s", remapped, want)
+	}
+}
+
+func TestRemapTranscriptRejectsIrreversibleRewrites(t *testing.T) {
+	mapping, err := pathmap.New(pathmap.Move{From: "/work/project", To: "/target"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	transcript := lines(`{"type":"attachment","attachment":{"type":"instructions","text":"/work/project and /target"},"cwd":"/work/project"}`)
+
+	// when
+	_, err = layouts[0].remapTranscript(transcript, mapping)
+
+	// then
+	if err == nil || !strings.Contains(err.Error(), "reversible") {
+		t.Fatalf("remapTranscript() error = %v", err)
+	}
+}
+
+func TestLayoutForVersions(t *testing.T) {
+	for _, test := range []struct {
+		version   string
+		supported bool
+		tested    bool
+	}{
+		{version: "2.1.316", supported: false},
+		{version: "2.1.317", supported: true, tested: true},
+		{version: "2.1.319", supported: true, tested: true},
+		{version: "2.1.320", supported: true, tested: false},
+	} {
+		// when
+		_, tested, err := layoutFor(test.version)
+
+		// then
+		if (err == nil) != test.supported || tested != test.tested {
+			t.Fatalf("layoutFor(%s) tested = %t, error = %v", test.version, tested, err)
+		}
+	}
+}
+
+func lines(records ...string) []byte {
+	return []byte(strings.Join(records, "\n") + "\n")
+}

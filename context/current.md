@@ -3,7 +3,7 @@
 ## Product
 
 - `agent-teleport` is one Go binary for every provider; archives use `.teleport`. Commands detect the provider.
-- OpenAI Codex 0.165.0 and newer is implemented, tested through 0.167.0. Claude Code is the next provider.
+- OpenAI Codex 0.165.0 and newer is implemented, tested through 0.167.0, and Claude Code 2.1.317 and newer, tested through 2.1.319.
 - Fidelity means preserving the recorded session history, not live processes, credentials, project files, or external state.
 - Linux and macOS first; path logic stays testable on Windows.
 - The command surface and the planned repository sessions (`save`, `open`, `status`) are specified in `ARCHITECTURE.md`.
@@ -15,15 +15,16 @@
 - Import applies the fast-forward update rule; `--replace` uses the recoverable rollback transaction.
 - Workspace remapping rewrites every boundary-delimited mention of the workspace in metadata events and preserves all other bytes; remapping there and back is the identity on the native fixture.
 - Collision checks cover active and archived Codex sessions.
-- CI runs golangci-lint (doc comments required), Prettier, and the Go tests on Linux and macOS, with the required two-home E2E test against Codex 0.165.0, 0.166.0, and 0.167.0. `make check` runs the same checks locally.
+- CI runs golangci-lint (doc comments required), Prettier, and the Go tests on Linux and macOS, with the required two-home E2E tests; each job pairs one Codex version (0.165.0 to 0.167.0) with one Claude Code version (2.1.317 to 2.1.319). `make check` runs the same checks locally.
 - Whole sessions transfer: sub-agent threads, forks with their ancestor prefixes, and reverts, which import replays through `thread/revert`. Updates append records under Codex's thread writer lock.
+- The CLI works through `provider.Adapter` and `provider.Store`; path rewriting, durable file writes, and version ordering are shared packages.
+- Claude Code sessions transfer as files: transcript, sub-agent files, and saved tool outputs, with `cwd` and environment attachments remapped. The Claude Code E2E test records sessions against a scripted local Messages API.
 - The fixtures in `testdata/codex` are a sanitized Codex 0.167.0 rollout from a throwaway home, a native fork of it, and a sanitized session with a sub-agent and a revert followed by another turn.
 
 ## Next work
 
-1. Add the Claude Code adapter, then extract the provider interface from both adapters.
-2. Implement repository sessions: `save`, `open`, `status`, repository-relative paths, Git commit recording, secret scanning, and native forks for `save --as`.
-3. Add the interactive export picker.
+1. Implement repository sessions: `save`, `open`, `status`, repository-relative paths, Git commit recording, secret scanning, and native forks for `save --as`.
+2. Add the interactive export picker.
 
 ## Open questions
 
@@ -38,7 +39,6 @@
 - Native scan-and-repair does not refresh a cached rollout locator for every shared snapshot. Subagent histories are inspected through `thread/read`, not resumed as running agents.
 - Native archiving can move a parent's descendant histories too; verify every imported physical file after archive operations and restarts.
 - Validation must disable automatic goals, hooks, plugins, and shell snapshots, or resuming a stored thread can continue an active goal.
-- Claude transfers need renamed titles, subagent transcripts, tool results, and file history as well as the main transcript.
 - On Codex 0.154.0, resume derived its live sandbox from the configured permission profile and the new workspace, not from recorded workspace paths.
 - Codex 0.167.0 `thread/fork` writes a two-line rollout whose `history_base` holds the parent thread ID, an ordinal, and a byte offset into the parent's rollout. Forks need no model call, so `save --as` can use them.
 - App Server `thread/list` returns only interactive sources unless `sourceKinds` is given, and Codex names rollout files after local time.
@@ -50,3 +50,12 @@
 - Codex picks up records appended to a rollout when it next loads the thread, and holds an exclusive `flock` on `thread-writer-locks/<thread>.lock` while a process has the thread loaded.
 - A sub-agent rollout names its parent's session in `session_id`; the scan rebuilds `thread_spawn_edges`, and a sub-agent can be resumed only through its parent.
 - `thread/delete` refuses a thread that forks reference.
+
+## Claude Code findings
+
+- Claude Code resumes `--resume <id>` from a transcript in any project folder and appends to it there; `--continue` and the picker use the project folder of the current directory. Folder names replace every UTF-16 unit other than ASCII letters and digits with `-`; names over 200 characters are cut to 200 and suffixed with `-` and base 36 of the absolute 32-bit Java-style string hash.
+- Resuming from another directory makes Claude Code add an `environment` attachment and a system message naming the new and old working directories. The recorded `prompt_snapshot` system prompt is replayed as is, outside `--bare`.
+- `api-request`, `api-request-shape`, and `api-request-blob` records are content-addressed request logs; resume does not read them.
+- Every record but file-history records carries the session ID; sub-agent records also carry `agentId` and `isSidechain`. `--fork-session` writes a full copy under a new ID. `--resume-session-at <uuid>` creates a rewind branch non-interactively.
+- `sessions/<pid>.json` lists running processes with `sessionId` and `status` (`busy` during a turn) and disappears on exit.
+- Claude Code 2.1.317 through 2.1.319 write the same record and attachment types and session folder layout.

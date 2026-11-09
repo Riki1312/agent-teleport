@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/Riki1312/agent-teleport/internal/archive"
+	"github.com/Riki1312/agent-teleport/internal/claude"
 	"github.com/Riki1312/agent-teleport/internal/codex"
 	"github.com/Riki1312/agent-teleport/internal/codex/appserver"
 )
@@ -501,13 +502,20 @@ func run(
 	return stdout.Bytes()
 }
 
-// cleanEnvironment runs agent-teleport against an isolated Codex home.
+// cleanEnvironment runs agent-teleport against an isolated Codex home, with
+// Claude Code reported as not installed.
 func cleanEnvironment(home, codexPath string) []string {
 	return isolatedEnvironment(
 		"CODEX_HOME="+home,
 		codex.BinaryEnvironment+"="+codexPath,
+		"CLAUDE_CONFIG_DIR="+home+"-claude",
+		claude.BinaryEnvironment+"="+missingCommand,
 	)
 }
+
+// missingCommand names a command that is not installed, so agent-teleport
+// skips the provider it would run.
+const missingCommand = "agent-teleport-missing-command"
 
 // isolatedEnvironment returns the process environment without provider homes
 // and binaries, followed by settings.
@@ -516,7 +524,7 @@ func isolatedEnvironment(settings ...string) []string {
 	for _, value := range os.Environ() {
 		name, _, _ := strings.Cut(value, "=")
 		switch name {
-		case "CODEX_HOME", codex.BinaryEnvironment:
+		case "CODEX_HOME", codex.BinaryEnvironment, "CLAUDE_CONFIG_DIR", claude.BinaryEnvironment:
 		default:
 			environment = append(environment, value)
 		}

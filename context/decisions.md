@@ -12,9 +12,9 @@ Each entry uses this shape:
 
 ### One binary for every provider
 
-- `decision`: Ship one `agent-teleport` binary. Archives use the `.teleport` extension. Commands detect the provider from the session or archive; provider identifiers are `openai-codex` and, next, `anthropic-claude`.
+- `decision`: Ship one `agent-teleport` binary. Archives use the `.teleport` extension. Commands detect the provider from the session or archive; provider identifiers are `openai-codex` and `anthropic-claude`.
 - `rationale`: One command vocabulary is simpler than a binary per provider.
-- `impact`: `list` shows sessions from every installed provider.
+- `impact`: `list` and `export` consult every installed provider, skipping missing ones silently and reporting broken ones on stderr; `import` and `inspect` use the provider named in the manifest.
 
 ### Preserve recorded history with honest fidelity
 
@@ -32,7 +32,7 @@ Each entry uses this shape:
 
 - `decision`: When a session already exists, compare the two copies. Identical copies succeed without changes, a longer incoming copy updates the existing one, and a longer local copy is kept. Diverged copies, or copies mapped to another workspace, fail unless the user passes `--replace` (`import`, `open`) or saves a native fork with `--as` (`save`).
 - `rationale`: Provider transcripts only grow at the end, so prefix comparison identifies safe updates without a collision policy.
-- `impact`: Repeated imports are safe, and updates use the recoverable replacement transaction.
+- `impact`: Repeated imports are safe. Each adapter applies the rule per thread or file.
 
 ### Keep sessions in repositories as unpacked archives
 
@@ -46,13 +46,13 @@ Each entry uses this shape:
 
 - `decision`: Map each rollout layout to a range of provider versions, starting at a minimum version and tested through the newest release verified by a sanitized fixture and the two-home test in CI. Older versions fail closed; newer versions are accepted with a `doctor` warning while structural validation still rejects unknown layouts. Drop older layouts, their fixtures, and their code once newer support lands. Unreleased formats change without migrations.
 - `rationale`: Codex releases every few days; exact-version gating would break with every release, while structural validation and the CI matrix keep support honest.
-- `impact`: Codex 0.165.0 and newer are supported, tested through 0.167.0; Codex 0.154.0 support is removed.
+- `impact`: Codex 0.165.0 and newer are supported, tested through 0.167.0, and Claude Code 2.1.317 and newer, tested through 2.1.319. CI pairs one version of each provider per job.
 
 ### Let the provider repair its own state
 
-- `decision`: Place session files, then let the provider rebuild and verify its state through a supported interface, such as Codex App Server scan-and-repair, `thread/read`, and `thread/delete`. Never write provider databases.
-- `rationale`: Providers own their evolving schemas; a rollout-only import persisted and resumed correctly across App Server restarts.
-- `impact`: Import is verified through the provider's own listing, state, and read results.
+- `decision`: Place session files, then let the provider rebuild and verify its state through a supported interface, such as Codex App Server scan-and-repair, `thread/read`, and `thread/delete`. Never write provider databases. A provider without such an interface, like Claude Code, is changed only through the session files it reads.
+- `rationale`: Providers own their evolving schemas; a rollout-only import persisted and resumed correctly across App Server restarts, and Claude Code resumes any transcript it finds.
+- `impact`: Codex imports are verified through the provider's own listing, state, and read results; Claude Code imports by reading the placed files back, and by the two-home test.
 
 ### Export only completed turns
 
@@ -72,9 +72,27 @@ Each entry uses this shape:
 - `rationale`: Codex picks up appended records when it next loads a thread, and its writer lock is the only cross-process signal that a session is open; App Server status cannot see other processes.
 - `impact`: Updates no longer delete threads, so threads that forks reference can be updated. The listing's update time stays at its old value until Codex itself writes to the thread.
 
+### Transfer whole Claude Code sessions as files
+
+- `decision`: A Claude Code session archive holds the transcript and the known files of its session folder, sub-agent transcripts and metadata and saved tool outputs, at paths relative to the project folder; unknown files fail closed, and file history backups are not exported. Import places them in the project folder named after the target workspace, replacing each file through a stage file and a rename with the transcript last. A copy in another project folder is moved only with `--replace`.
+- `rationale`: Claude Code has no index: it resumes a transcript found in any project folder, keeps rewinds as branches inside the transcript, and writes native forks as self-contained sessions. Its project folder name is derived from the workspace path, so `--continue` and the session picker find only transcripts in the right folder.
+- `impact`: Rewinds, forks, and sub-agents need no special handling. Imports reproduce Claude Code's folder naming, including the hash of long paths.
+
+### Move Claude Code environment paths
+
+- `decision`: On import, move the source workspace and the source project folder, recorded through the manifest's `home`, to the target's. Rewrite each record's `cwd` and every boundary-delimited mention in `environment`, `instructions`, and `prompt_snapshot` attachments, reversibly; leave messages, tool calls, tool results, and request logs as recorded.
+- `rationale`: Claude Code replays the recorded system prompt and environment when it resumes, and without the rewrite the model would see the old workspace and memory folder, with only a native note that the directory moved.
+- `impact`: Resumed requests name only target paths in their environment, and moving a session back restores its original bytes. Saved tool outputs keep their source paths in tool results.
+
+### Coordinate with Claude Code through its session registry
+
+- `decision`: Refuse to export a session that a live process in Claude Code's `sessions/<pid>.json` registry reports as anything but idle, and refuse to change a session that a live process has open.
+- `rationale`: Claude Code takes no lock on transcripts; the registry is the only cross-process signal of an open session.
+- `impact`: The check is not atomic, so a Claude Code process that starts during an import is not detected. Platforms without a process check treat every registered process as alive.
+
 ### Replace through a recoverable rollback link
 
-- `decision`: Replace a diverged single-thread session by hard-linking its rollout as a rollback copy, deleting the thread through App Server, placing and repairing the new rollout, then removing the rollback link as the commit point.
+- `decision`: Replace a diverged single-thread Codex session by hard-linking its rollout as a rollback copy, deleting the thread through App Server, placing and repairing the new rollout, then removing the rollback link as the commit point.
 - `rationale`: App Server does not refresh an indexed thread when its file is overwritten; the link preserves the old rollout without copying it.
 - `impact`: Any interruption before the commit point is rolled back on the next import. Dry runs detect recovery markers but never recover.
 
@@ -100,15 +118,21 @@ Each entry uses this shape:
 
 ### Test from deterministic core to native providers
 
-- `decision`: Use unit tests, sanitized fixtures, and a two-home end-to-end test against the native provider CLI, required in CI. Tests that need authentication or model calls are opt-in smoke tests.
+- `decision`: Use unit tests and a two-home end-to-end test against each native provider CLI, required in CI. Codex sessions come from sanitized fixtures; Claude Code sessions are recorded during the test against a scripted local Messages API through `ANTHROPIC_BASE_URL`, which also captures what a resumed session sends. Tests that need authentication or model calls are opt-in smoke tests.
 - `rationale`: Pull-request gates must be deterministic and credential-free; the native CLI is the black-box oracle for storage changes.
-- `impact`: Every supported version has a fixture that passes the two-home test.
+- `impact`: Every supported version passes the two-home test of its provider.
 
 ### Pin dependencies and tools
 
 - `decision`: Prefer the standard library. Pin the latest stable version of every dependency and tool, update them automatically, and use Bubble Tea v2 for the planned picker.
 - `rationale`: Pinned versions keep builds reproducible; automated updates keep them current.
 - `impact`: The module requires Go 1.25 or newer; Dependabot updates Go modules and GitHub Actions.
+
+### Extract shared code from both adapters
+
+- `decision`: Keep provider-neutral values and adapter descriptions in `internal/provider`, and shared mechanisms in `internal/pathmap`, `internal/fsutil`, and `internal/semver`, each extracted once both adapters needed it.
+- `rationale`: Abstractions drawn from two concrete adapters fit both without speculative extension points.
+- `impact`: The CLI imports no adapter-specific types; a new provider implements `provider.Store` and registers a `provider.Adapter`.
 
 ### Enforce doc comments and Markdown formatting
 
