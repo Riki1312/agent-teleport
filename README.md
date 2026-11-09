@@ -1,46 +1,48 @@
 # agent-teleport
 
-`agent-teleport` is a lightweight toolkit for moving resumable local coding-agent sessions between workstations. Its first binary, `cxport`, targets OpenAI Codex.
-
-The project preserves the recorded provider event stream rather than flattening a session into a human-readable transcript. An imported session can be associated with a different workspace and resumed through the native agent CLI.
+`agent-teleport` moves resumable coding-agent sessions between workstations. It preserves the agent's recorded history instead of flattening it into a transcript, maps the session to a local workspace, and leaves you one command away from resuming it with the agent's own CLI.
 
 ```sh
-cxport export --last -o - | ssh workstation cxport import -
+agent-teleport export --last -o - | ssh workstation agent-teleport import -
 ```
 
-The dependency-free CLI core is under active development. It can list, export, inspect, and import Codex 0.154.0 sessions, including direct stdin/stdout transfer. See [`ARCHITECTURE.md`](ARCHITECTURE.md) for the command interface, archive format, fidelity model, and safety boundaries.
+OpenAI Codex 0.154.0 is supported today. Support for the latest Codex and Claude Code, and for keeping sessions in a repository next to their code, is in progress; see [`ARCHITECTURE.md`](ARCHITECTURE.md).
+
+## Install
+
+Building requires Go 1.25 or newer:
 
 ```sh
-go build ./cmd/cxport
-./cxport doctor
-./cxport list
-./cxport export --last
-./cxport inspect ./session.cxport
-./cxport import ./session.cxport
+go install github.com/Riki1312/agent-teleport/cmd/agent-teleport@latest
+agent-teleport doctor
 ```
 
-The interactive picker is intentionally deferred. Until it lands, pass a session ID or `--last` to `export`. Existing sessions fail closed by default; import supports explicit `skip` and recoverable `replace` policies.
+## Usage
 
-Support is limited to self-contained Codex 0.154.0 rollouts. Histories with external `history_base` dependencies or different thread and session IDs are rejected before transfer. Newer Codex versions and Claude Code are not supported yet.
+```sh
+agent-teleport list                            # sessions for this directory
+agent-teleport export --last                   # writes <title>-<id>.teleport
+agent-teleport inspect session.teleport        # validates without changing anything
+agent-teleport import session.teleport         # maps the session to this directory
+agent-teleport import session.teleport --cwd ~/src/project --resume
+```
 
-## Initial scope
+Run `agent-teleport <command> --help` for every option.
 
-- OpenAI Codex through the `cxport` binary
-- Immutable `.cxport` archives
-- Linux and macOS support
-- Local and piped transfer without a synchronization service
-- Explicit failure for unsupported Codex storage versions
+Importing a session that already exists is safe to repeat: a longer archive updates the local session, a longer local session is kept, and identical copies are left alone. Copies that have diverged are only overwritten with `--replace`, which keeps a recoverable backup until the replacement is verified.
 
-Live processes, credentials, project files, and external tool state are not included in a session archive.
+## What moves
+
+An archive contains the session's recorded history and nothing else. Project files, uncommitted changes, credentials, running processes, and tool state stay on the source machine, so check out the same code before resuming. Archives can contain prompts, command output, file contents, and secrets printed during the session: treat them as sensitive.
+
+Sessions that span several history files, such as multi-agent threads and modern paginated histories, are rejected rather than exported incompletely.
 
 ## Development
 
-The module requires Go 1.25 or newer. Repository conventions live in [`AGENTS.md`](AGENTS.md), and current work is tracked in [`context/current.md`](context/current.md).
-
-The ordinary test suite includes a credential-free, two-home transfer test when a supported Codex CLI is installed; otherwise that test skips. To require the installed Codex version to match the compatibility table, run:
-
 ```sh
-CXPORT_E2E_REQUIRED=1 go test -v ./test/e2e
+make check   # lint, tests, Markdown formatting, whitespace
+make format  # gofmt and Prettier
+make e2e     # require the native two-home test
 ```
 
-This test uses a sanitized completed rollout and never starts a model turn.
+`make check` needs Go and Node. The end-to-end test runs against an installed, supported Codex CLI without credentials or model calls, and skips when none is installed; `make e2e` and CI require it. Contributor and agent conventions live in [`AGENTS.md`](AGENTS.md).

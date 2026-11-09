@@ -1,132 +1,70 @@
-# agent-teleport architecture
+# Architecture
 
-## Status
+`agent-teleport` moves the recorded history of a local coding-agent session to another workstation, or into a repository, so the session can be resumed with the agent's own CLI. This document describes the current design and the planned work it is built for. Durable decisions and their rationale live in [`context/decisions.md`](context/decisions.md).
 
-This document describes the intended version 1 architecture. Codex session storage is not a public compatibility boundary, so provider details remain version-gated.
+## Scope
 
-## Purpose
+The CLI is a single CGO-free Go binary, `agent-teleport`, for Linux and macOS. OpenAI Codex is the implemented provider; Claude Code is the next one. Commands detect the provider from the session or archive, so users never name it.
 
-`agent-teleport` provides portable, lossless transfer of the recorded history needed to resume a local coding-agent session on another workstation.
+Goals:
 
-The first provider is OpenAI Codex:
+- Preserve the complete recorded session history byte for byte, apart from documented workspace path rewrites.
+- Map an imported session to a different local workspace.
+- Make every command safe, inspectable, scriptable, and predictable.
+- Fail without changing local state when a storage layout is unknown.
 
-- Project: `agent-teleport`
-- Binary: `cxport`
-- Archive extension: `.cxport`
-- Provider identifier: `openai-codex`
+Non-goals:
 
-The `.cxport` file is a gzip-compressed tar archive. The custom extension presents a stable user-facing format while allowing ordinary archive tools to inspect it.
-
-The project name and outer archive format are provider-neutral. A future Claude adapter may use a separate `clport` binary and an `anthropic-claude` provider identifier without changing the Codex UX.
-
-## Goals
-
-- Preserve the complete recorded Codex replay stream and resumable turn history.
-- Transfer a session between machines without requiring a cloud synchronization service.
-- Associate an imported session with a different local workspace.
-- Make export and import safe, inspectable, scriptable, and predictable.
-- Ship as a single CGO-free Go binary.
-- Detect unsupported Codex storage layouts and fail without modifying local state.
-- Support Linux and macOS first while keeping path behavior testable for Windows.
-
-## Non-goals
-
-- Transferring live processes, shell state, credentials, or external service state.
-- Copying the project working tree or uncommitted Git changes.
-- Making unavailable models, MCP servers, plugins, skills, or attachments available on the destination machine.
-- Exporting a session while Codex is writing an incomplete turn.
-- Synchronizing concurrent edits to the same session on multiple machines.
-- Renaming, cloning, or rewriting session identifiers.
-- Providing a generic multi-provider frontend in version 1.
+- Transferring live processes, shell state, credentials, project files, uncommitted changes, or external service state.
+- Making models, MCP servers, plugins, or skills available on the destination machine.
+- Exporting a session while its agent is writing a turn.
+- Merging concurrent edits of one session made on different machines.
+- Renaming or cloning session identifiers, except through a provider's native fork.
 
 ## Fidelity model
 
-A transfer is lossless with respect to the recorded provider event stream: the source rollout bytes are stored unchanged in the archive. This does not imply that the destination environment is identical to the source environment.
+A transfer is lossless with respect to the recorded provider event stream: an archive stores the provider's files unchanged. Importing into another workspace rewrites workspace paths in the metadata events that the provider reads when it rebuilds session state, and nothing else. Recorded tool calls and their results stay as recorded, so a resumed session may refer to paths, tools, or permissions that differ on the destination machine.
 
-In particular, tool calls and their recorded results remain in the history, but live tool state does not move with the archive. Resuming may behave differently when local files, configuration, permissions, credentials, tools, or provider capabilities differ.
-
-## Command interface
-
-### List
+## Commands
 
 ```text
-cxport list [--all] [--json]
+agent-teleport list    [--all] [--json]
+agent-teleport export  (SESSION | --last) [--all] [-o PATH|-]
+agent-teleport import  (ARCHIVE | -) [--cwd PATH] [--replace] [--dry-run] [--resume]
+agent-teleport inspect (ARCHIVE | -) [--json]
+agent-teleport doctor  [--json]
 ```
 
-By default, list sessions associated with the current directory. `--all` includes sessions from other directories. Human-readable output is the default; `--json` provides a stable automation interface.
+- `list` shows the sessions of the current directory, or of every directory with `--all`, newest first. `--json` is the stable automation interface.
+- `export` accepts a session ID, a unique ID prefix, or an exact title. Without `-o` it writes `<title>-<id>.teleport` to the current directory; `-o -` writes the archive to stdout and every diagnostic to stderr.
+- `import` maps the session to the current directory unless `--cwd` names another one. It prints the command that resumes the session, and runs it with `--resume`.
+- `inspect` validates an archive, describes its session, and reports whether it can be imported into the current directory. It never changes local state.
+- `doctor` reports the detected agents, their versions, and whether they are supported.
 
-### Export
+Usage errors exit with status 2 and other failures with status 1. An interactive session picker for `export` is planned; it will receive plain session values and never run when stdout is redirected or JSON is requested.
 
-```text
-cxport export [SESSION] [--all] [--last] [-o PATH|-]
-```
-
-- With no session selector in an interactive terminal, open a picker filtered to the current directory.
-- `--all` removes the directory filter from the picker.
-- `--last` selects the most recent session associated with the current directory.
-- `SESSION` accepts a session UUID or an unambiguous session name.
-- `-o PATH` writes to that path.
-- `-o -` writes the archive to stdout and all diagnostics to stderr.
-- Without `-o`, write `<sanitized-title>-<short-id>.cxport` in the current directory.
-- Conflicting selectors are usage errors rather than precedence rules.
-
-Export refuses sessions with an incomplete or actively changing turn. Version 1 does not provide a force flag for bypassing this check.
-
-### Import
-
-```text
-cxport import <ARCHIVE|-> [--cwd PATH | --preserve-cwd]
-              [--if-exists error|skip|replace] [--dry-run] [--resume]
-```
-
-- The default target workspace is the current directory.
-- `--cwd PATH` selects another target workspace.
-- `--preserve-cwd` retains the source workspace metadata.
-- The default collision policy is `error`.
-- `skip` succeeds without changing the existing session.
-- `replace` transactionally replaces the existing session after preserving a local backup.
-- `--dry-run` performs discovery, compatibility, integrity, and collision checks without changing state.
-- `--resume` launches `codex resume <SESSION_ID>` after a successful import.
-
-Import does not launch Codex by default. On success it prints the imported session ID, target workspace, and exact command needed to resume it.
-
-An archive read from stdin is first spooled to a private temporary file. Import fully validates it before modifying Codex state. This enables direct transfer:
+Direct transfer works over any pipe:
 
 ```sh
-cxport export --last -o - | ssh workstation cxport import -
+agent-teleport export --last -o - | ssh workstation agent-teleport import -
 ```
 
-### Inspect
+### Updating an existing session
 
-```text
-cxport inspect <ARCHIVE|-> [--json]
-```
+Provider transcripts only grow at the end, so two copies of one session either match, one extends the other, or they have diverged. Every command that writes a session applies the same rule:
 
-Inspect validates and reports archive metadata, checksums, source provider version, session identity, original workspace, and local import compatibility. It never changes Codex state.
+| Local and incoming copies | Result |
+| --- | --- |
+| Identical | Nothing changes; the command succeeds. |
+| Incoming extends local | The local session is updated to the incoming copy. |
+| Local extends incoming | The local session is kept; the command succeeds. |
+| Diverged, or mapped to another workspace | The command fails unless `--replace` is given. |
 
-### Doctor
-
-```text
-cxport doctor [--json]
-```
-
-Doctor reports the detected Codex version, Codex home, session store, required App Server capabilities, and filesystem access. It never changes Codex state.
-
-### Interactive picker
-
-The export picker uses the latest stable Bubble Tea v2 and Bubbles v2 releases pinned in `go.mod`. It receives normalized session values and returns a session ID; it does not access Codex storage or create archives. Non-interactive commands, redirected output, `--json`, and `-o -` never initialize the TUI.
+Updates and replacements use the recoverable replacement transaction described below.
 
 ## Archive format
 
-Version 1 uses the following logical layout:
-
-```text
-manifest.json
-checksums.sha256
-providers/openai-codex/rollout.jsonl
-```
-
-`manifest.json` is the first tar entry so metadata can be read early. A minimal manifest resembles:
+A packed archive is a gzip-compressed tar file with the `.teleport` extension. Its first entry is `manifest.json`, followed by exactly the payload files the manifest lists, in order:
 
 ```json
 {
@@ -135,130 +73,114 @@ providers/openai-codex/rollout.jsonl
   "provider": "openai-codex",
   "provider_version": "0.154.0",
   "session_id": "01a09a34-754a-7343-8d40-37a2af117f2f",
-  "created_at": "2026-09-13T09:58:44Z",
-  "original_cwd": "/home/alice/src/example",
-  "payload": {
-    "rollout": "providers/openai-codex/rollout.jsonl"
-  }
+  "workspace": "/home/alice/src/example",
+  "created_at": "2026-11-09T09:58:44Z",
+  "files": [{ "path": "rollout.jsonl", "size": 48213, "sha256": "…" }]
 }
 ```
 
-The manifest schema will be defined formally before the first stable release. Unknown required fields or unsupported format versions cause a hard failure.
+- Payload paths are clean, relative, and slash-separated; the provider chooses them.
+- Decoding rejects unknown manifest fields, unsupported format versions, unlisted or missing entries, links and other non-regular files, size limit violations, and digest mismatches.
+- Digests detect accidental corruption. They are not signatures and do not establish who created an archive.
+- Archives are immutable. Export verifies the encoded archive before writing it, and creates the output file exclusively.
 
-`rollout.jsonl` contains the original rollout bytes. Version 1 does not copy the source SQLite database. The initial App Server probe reconstructed the thread from this file alone; additional payload may be introduced only when a supported-version test proves it necessary.
+The format is unreleased, so it changes in place without migrations until the first stable release.
 
-`checksums.sha256` detects accidental corruption of every payload entry. It is not a digital signature and does not establish who created the archive.
-
-Archives are immutable after creation. Workspace remapping produces a transformed copy during import; it never edits the archive or its preserved source rollout.
-
-## Component boundaries
+## Components
 
 ```text
-CLI/TUI
-  |
-  +-- Archive package (provider-neutral)
-  |     manifest, tar/gzip, checksums, validation
-  |
-  +-- Provider interface
-        |
-        +-- Codex adapter
-              discovery
-              quiescence checks
-              rollout validation
-              compatibility detection
-              workspace remapping
-              state repair and verification
+cmd/agent-teleport        process entry point
+internal/cli              argument parsing, session selection, output
+internal/archive          provider-neutral manifest, packing, validation
+internal/codex            Codex adapter: discovery, export, import, repair
+internal/codex/appserver  JSON-RPC client for codex app-server --stdio
+internal/buildinfo        build version
+tools/sanitize-fixture    produces sanitized Codex fixtures
 ```
 
-Provider-specific paths, event shapes, database schemas, and compatibility rules must remain inside the provider adapter. The CLI and archive packages operate on normalized session metadata and opaque provider payloads.
+The CLI operates on archives and plain session values. Provider paths, event shapes, version rules, and state repair stay inside the provider adapter. A provider interface will be extracted from the Codex and Claude Code adapters once both exist, rather than designed in advance.
 
-The provider interface should be narrow and derived from implemented workflows rather than designed for hypothetical providers. Provider-neutral abstractions are introduced only where the Codex implementation already requires them.
+## Codex adapter
 
-## Codex export
+Codex storage is a private implementation detail. The adapter prefers Codex App Server over direct database access and never writes Codex databases.
 
-The adapter performs these steps:
+### Export
 
-1. Locate the active Codex home and supported state store.
-2. Discover candidate sessions and resolve the requested selector.
-3. Reject an active App Server status, then independently require the rollout to end in the version-specific completed-turn event. App Server status alone is not a cross-process activity lock.
-4. Read a consistent snapshot and verify that its size and modification time did not change during the read.
-5. Validate its session identity and metadata.
-6. Build the archive in a private temporary location.
-7. Verify the completed archive and atomically rename it to the output path.
+1. Discover sessions through App Server `thread/list`.
+2. Require an idle or unloaded thread. App Server cannot see turns running in another Codex process, so the rollout must also end with the version's completed-turn event.
+3. Read the rollout and fail if its size or modification time changed during the read.
+4. Validate the session identity and reject layouts that one archive cannot preserve: a non-null `history_base`, which refers to other rollout files, and divergent thread and session IDs, which multi-agent child threads use.
+5. Build the archive in memory, verify it, and write it.
 
-For `-o -`, the verified temporary archive is copied to stdout after construction. This sacrifices true streaming in exchange for never emitting a partial archive that appeared successful.
+### Import
 
-Any compatibility adapter that reads SQLite directly must account for WAL mode and concurrent Codex activity. It must not copy a live database file directly.
+1. Decode and validate the whole archive in memory.
+2. Require the archive's Codex version to equal the installed version.
+3. Canonicalize the target workspace, resolving symlinks in its existing ancestors.
+4. Rewrite workspace paths: every JSON string in a workspace metadata event that equals the source workspace or lies below it. Other bytes are preserved, and a workspace path in any other form fails the import.
+5. Recover any interrupted replacement, then find existing copies in both the active and archived session stores. Codex lists only active threads, so an archived copy must be found on disk.
+6. Apply the update rule. A new rollout is written to a stage file and hard-linked into place, so Codex never sees a partial file and an existing one is never overwritten.
+7. Let App Server scan and repair its state, then require the scan, the state database, and `thread/read` to agree on the session and its workspace. A failed verification deletes the new session again.
 
-## Codex import
+A dry run performs every check up to the update decision and never starts App Server.
 
-The adapter performs these steps:
+### Replacement transaction
 
-1. Spool and validate the entire archive without changing local state.
-2. Confirm the provider, archive version, Codex version, and rollout layout are supported.
-3. Resolve and canonicalize the target workspace.
-4. Detect an existing session ID and apply the selected collision policy.
-5. Create a private staging directory and construct the destination rollout.
-6. Remap the format-specific workspace metadata required by the installed Codex version. For Codex 0.154.0 this includes workspace fields in `session_meta`, `world_state`, `turn_context`, and `thread_settings_applied` events; changing only the first line is insufficient.
-7. Atomically place the rollout using an ordering that can be recovered after interruption.
-8. Ask Codex App Server to scan the session store and repair its owned index state.
-9. Verify discovery from state-only listing, read the thread, and verify resume support where the target history mode permits it.
-10. Use direct transactional state repair only for a known Codex version where tests prove App Server repair is insufficient.
-11. Update legacy indexes only when a compatibility adapter proves they are required.
-
-The Codex 0.154.0 spike confirmed that normal `thread/list` discovers a new rollout, persists repaired state, and supports `thread/read` and `thread/resume` after an App Server restart. This matches the documented scan-and-repair behavior of [`useStateDbOnly`](https://learn.chatgpt.com/docs/app-server). It does not refresh an already indexed thread after its rollout is replaced. Replacement therefore uses App Server `thread/delete` to clear the old owned state before placing and repairing the new rollout.
-
-`replace` uses a recoverable transaction in the rollout directory:
+App Server does not refresh an indexed thread when its rollout is overwritten, so updates and replacements delete the thread through App Server and repair it from the new rollout:
 
 1. Recover any rollback link left by an interrupted replacement.
-2. Validate the old rollout and write the new rollout to a deterministic stage file.
-3. Hard-link the old rollout as the rollback copy and sync the directory.
-4. Ask App Server to delete the old thread and confirm its rollout is absent.
-5. Rename the staged rollout into place, repair it, and verify list and read state.
-6. Remove and sync the rollback link as the commit point.
+2. Stage the new rollout, hard-link the old one as a rollback copy, and sync the directory.
+3. Delete the old thread through App Server and confirm that its rollout is gone.
+4. Move the staged rollout into place and verify its repair.
+5. Remove the rollback link and sync the directory; this is the commit point.
 
-An interruption before the commit point leaves the rollback link. The next import deletes any partial replacement through App Server, restores the old link, repairs the old thread, and only then begins a new transaction. Fault-injection tests cover every persisted phase.
+Any failure or interruption before the commit point restores the old rollout, deletes partial state, and repairs the old thread, either immediately or on the next import. Fault-injection tests interrupt the transaction after every persisted phase.
 
-## Compatibility policy
+### Supported versions
 
-Codex local storage is treated as a versioned private implementation detail.
+Each supported Codex version maps to a verified rollout layout: its completed-turn event and its workspace metadata events. Unknown versions fail closed with a diagnostic from `doctor`. Support targets the latest and recent Codex releases; adding a version requires a sanitized fixture that passes the two-home test against that exact Codex CLI, and older versions are removed rather than kept.
 
-The adapter table is keyed by the exact Codex CLI version. Each entry records a layout fingerprint, completed-turn event, workspace metadata event set, rollout filename layout, and verified App Server capabilities. The initial entry is:
+Codex 0.154.0 is supported today. Modern Codex histories span several physical rollout files and need multi-file payloads before newer versions can be enabled.
 
-| Codex | Layout fingerprint | Filename layout | App Server capabilities |
-| --- | --- | --- | --- |
-| 0.154.0 | `rollout-v1:task-complete:workspace-metadata-v1` | `date-partitioned-rollout-v1` | scan/repair, read, resume, delete |
+## Repository sessions (planned)
 
-- Each adapter declares the Codex versions, rollout layouts, and App Server capabilities it supports.
-- Unknown event layouts or missing capabilities fail closed with a diagnostic from `cxport doctor`.
-- Import compatibility is directional: a bundle that can be inspected may still be too new or too old to import into the installed Codex version.
-- Schema introspection is used to recognize known layouts, not to guess how unknown columns should be populated.
-- Backward-compatibility files such as `session_index.jsonl` are updated only for versions known to use them.
-- Supported-version fixtures and round-trip tests are kept for every compatibility adapter.
+Sessions will also be kept in a repository, next to the code they discuss:
 
-The fixture for each entry is sanitized, contains no original conversation text or credentials, and must pass the credential-free two-home transfer test against that exact Codex version. `cxport doctor --json` exposes the selected fingerprint, filename layout, and capability set for diagnostics.
+```text
+agent-teleport save   [SESSION | --last] [--name NAME] [--as NAME]
+agent-teleport open   NAME [--resume]
+agent-teleport status [--json]
+```
 
-Where a supported Codex API can perform an operation safely, it should be preferred over direct database mutation. Direct storage integration remains an adapter detail.
+- A saved session is an unpacked archive under `.agent-teleport/sessions/<name>/`: the same manifest, followed by the payload files as plain JSONL, which Git stores and diffs efficiently because transcripts only grow at the end.
+- Saved paths are relative to the repository root, and `open` maps them to the local checkout.
+- `save` records the Git commit and branch, and applies the update rule; a diverged session is saved under a new name with `--as`, through the provider's native fork.
+- `status` reports each saved session as in sync, local ahead, repository ahead, diverged, or not opened.
+- Saving runs a secret scan and refuses findings unless explicitly accepted, because committing a session publishes it to everyone with repository access.
+- The first save creates `.agent-teleport/` and a `.gitattributes` file that keeps payload diffs out of code review.
 
 ## Safety and privacy
 
-Rollouts may contain prompts, model output, reasoning records, commands, tool results, file contents, paths, repository metadata, and secrets accidentally printed during a session. Therefore:
+Session histories can contain prompts, model output, commands, tool results, file contents, paths, and secrets that were printed during a session. Therefore:
 
-- New archives and temporary files use owner-only permissions.
-- Import rejects absolute archive paths, parent traversal, links, duplicate entries, unexpected file types, and entries exceeding configured size limits.
-- Import never extracts directly into the Codex store.
-- Logs avoid printing rollout contents or secrets.
-- `inspect --json` reports metadata, not conversation content.
-- Replacing a session requires an explicit flag and creates a recoverable backup.
-- Encryption and signing are candidates for a later format version, not implicit properties of version 1.
+- Archives and staged files use owner-only permissions.
+- No command prints session content; `inspect --json` reports metadata only.
+- Import validates everything before it changes local state and never extracts into an agent's store directly.
+- Replacing a diverged session requires `--replace` and keeps a recoverable rollback until the replacement is verified.
+- Encryption and signing are candidates for a later format version.
+
+## Testing
+
+- Unit tests cover archive validation, rollout validation and remapping, the update rule, replacement recovery, and CLI parsing.
+- A two-home end-to-end test drives the built binary against a native Codex CLI and a sanitized fixture, without credentials or model calls: export, inspect, piped transfer, every update outcome, replacement recovery, archived sessions, and resume after repair. CI installs the pinned supported Codex version on Linux and macOS and requires this test.
+- Tests that need authentication or model calls are opt-in smoke tests, never pull-request gates.
 
 ## Design principles
 
 - Safe defaults over clever recovery.
 - Explicit failure over inferred compatibility.
-- One session per archive.
-- One immutable session identity.
+- One session per archive, with one immutable identity.
 - Read-only validation before mutation.
-- Atomic, idempotent import wherever possible.
+- Recoverable, idempotent writes.
 - Human-friendly defaults with machine-readable output for automation.
-- Provider-specific internals behind a small adapter boundary.
+- Provider details behind a small adapter boundary.

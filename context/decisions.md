@@ -143,3 +143,17 @@ This append-only file records durable product, architecture, and workflow decisi
 - `rationale`: Unwrapped prose produces clean diffs; doc comments keep the package boundaries explicit as the provider set grows.
 - `impact`: CI checks formatting, lint, tests, and the native Codex E2E. Node is a development-only requirement.
 - `evidence`: `.github/workflows/ci.yml`, `.golangci.yml`, `.prettierrc.json`.
+
+### 2026-11-09 - Detect existing Codex sessions from rollout files
+
+- `decision`: Decide whether a session already exists by searching the active and archived Codex session stores for its rollout, for both import and dry runs.
+- `rationale`: App Server `thread/list` omits archived threads; relying on it duplicated an archived session and the failed-repair cleanup deleted the archived rollout.
+- `impact`: Import never updates archived or moved copies; the user restores or deletes them in Codex first.
+- `evidence`: `internal/codex/import.go`, `test/e2e/transfer_test.go`.
+
+### 2026-11-09 - Remap workspace paths string by string
+
+- `decision`: In workspace metadata events, rewrite every JSON string that equals the source workspace or lies below it, keep all other bytes, and fail when the source workspace appears in any other form.
+- `rationale`: Codex 0.154.0 records the workspace in sandbox and permission entries and workspace roots as well as `cwd` keys, and re-encoding whole lines changed key order, escaping, and numbers.
+- `impact`: Remapping is reversible, which repository-relative sessions will rely on.
+- `evidence`: `internal/codex/rollout.go`, `internal/codex/rollout_test.go`.
