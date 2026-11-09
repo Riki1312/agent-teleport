@@ -1,78 +1,64 @@
 package cli
 
 import (
-	"os"
-	"path/filepath"
+	"bytes"
+	"context"
+	"errors"
+	"slices"
 	"testing"
 )
 
-func TestParseExportInterspersedOptions(t *testing.T) {
-	options, err := parseExport([]string{"session-id", "-o", "session.cxport", "--all"})
+func TestParseAcceptsFlagsBetweenArguments(t *testing.T) {
+	app := &App{Stdout: &bytes.Buffer{}}
+	set := newFlagSet("export")
+	output := set.String("o", "", "")
+	includeAll := set.Bool("all", false, "")
+
+	// when
+	positional, err := app.parse(set, []string{"session-id", "-o", "-", "--all", "second"}, exportUsage)
+
+	// then
 	if err != nil {
 		t.Fatal(err)
 	}
-	if options.session != "session-id" || options.output != "session.cxport" || !options.all {
-		t.Fatalf("unexpected options: %#v", options)
+	if !slices.Equal(positional, []string{"session-id", "second"}) || *output != "-" || !*includeAll {
+		t.Fatalf("parse() = %q, output %q, all %t", positional, *output, *includeAll)
 	}
 }
 
-func TestParseImportRejectsUnsafeCombinations(t *testing.T) {
-	tests := [][]string{
-		{"session.cxport", "--cwd", "/target", "--preserve-cwd"},
-		{"session.cxport", "--dry-run", "--resume"},
-		{"session.cxport", "--if-exists", "overwrite"},
-	}
-	for _, arguments := range tests {
-		if _, err := parseImport(arguments); err == nil {
-			t.Fatalf("parseImport(%q) succeeded", arguments)
+func TestImportRejectsInvalidOptionsBeforeReadingArchive(t *testing.T) {
+	for _, arguments := range [][]string{
+		{"import", "session.cxport", "--cwd", "/target", "--preserve-cwd"},
+		{"import", "session.cxport", "--dry-run", "--resume"},
+		{"import", "session.cxport", "--if-exists", "overwrite"},
+		{"import"},
+		{"import", "one.cxport", "two.cxport"},
+		{"import", "session.cxport", "--unknown"},
+	} {
+		app := &App{Stdout: &bytes.Buffer{}, Stderr: &bytes.Buffer{}}
+
+		// when
+		err := app.Run(context.Background(), arguments)
+
+		// then
+		var usageError *UsageError
+		if !errors.As(err, &usageError) {
+			t.Fatalf("Run(%q) error = %v, want a usage error", arguments, err)
 		}
 	}
 }
 
-func TestParseImportAcceptsReplace(t *testing.T) {
-	options, err := parseImport([]string{"session.cxport", "--if-exists", "replace"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if options.ifExists != collisionReplace {
-		t.Fatalf("ifExists = %q", options.ifExists)
-	}
-}
+func TestCommandHelpSucceeds(t *testing.T) {
+	for _, command := range []string{"list", "export", "inspect", "import", "doctor"} {
+		output := &bytes.Buffer{}
+		app := &App{Stdout: output}
 
-func TestWriteNewFileKeepsExistingOutput(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "session.cxport")
-	if err := os.WriteFile(path, []byte("existing"), 0o600); err != nil {
-		t.Fatal(err)
-	}
+		// when
+		err := app.Run(context.Background(), []string{command, "--help"})
 
-	// when
-	err := writeNewFile(path, []byte("replacement"))
-
-	// then
-	if err == nil {
-		t.Fatal("writeNewFile replaced an existing file")
-	}
-	data, readErr := os.ReadFile(path)
-	if readErr != nil || string(data) != "existing" {
-		t.Fatalf("existing output changed: %q, %v", data, readErr)
-	}
-}
-
-func TestWriteNewFileUsesOwnerOnlyPermissions(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "session.cxport")
-
-	// when
-	err := writeNewFile(path, []byte("archive"))
-
-	// then
-	if err != nil {
-		t.Fatal(err)
-	}
-	info, err := os.Stat(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if info.Mode().Perm() != 0o600 {
-		t.Fatalf("permissions = %v, want 0600", info.Mode().Perm())
+		// then
+		if err != nil || !bytes.HasPrefix(output.Bytes(), []byte("Usage:")) {
+			t.Fatalf("%s --help = %q, %v", command, output, err)
+		}
 	}
 }

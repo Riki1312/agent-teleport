@@ -1,3 +1,5 @@
+// Package appserver is a minimal JSON-RPC client for the Codex App Server
+// started with "codex app-server --stdio".
 package appserver
 
 import (
@@ -12,8 +14,12 @@ import (
 	"strings"
 )
 
-const maxMessageSize = 64 << 20
+const (
+	maxMessageSize = 64 << 20
+	maxStderrSize  = 64 << 10
+)
 
+// Thread is the subset of an App Server thread that agent-teleport uses.
 type Thread struct {
 	ID         string `json:"id"`
 	CWD        string `json:"cwd"`
@@ -28,6 +34,7 @@ type Thread struct {
 	} `json:"status"`
 }
 
+// RPCError is an error response returned by the App Server.
 type RPCError struct {
 	Code    int             `json:"code"`
 	Message string          `json:"message"`
@@ -40,19 +47,23 @@ func (e *RPCError) Error() string {
 
 type response struct {
 	ID     json.RawMessage `json:"id"`
+	Method string          `json:"method"`
 	Result json.RawMessage `json:"result"`
 	Error  *RPCError       `json:"error"`
 }
 
+// Client is a running App Server process. It is not safe for concurrent use.
 type Client struct {
 	command *exec.Cmd
 	stdin   io.WriteCloser
 	lines   *bufio.Scanner
-	stderr  bytes.Buffer
+	stderr  limitedBuffer
 	nextID  int
 	closed  bool
 }
 
+// Start launches the App Server for codexHome and completes its initialization
+// handshake. The process stops when ctx is canceled or Close is called.
 func Start(ctx context.Context, codexPath, codexHome string) (*Client, error) {
 	command := exec.CommandContext(ctx, codexPath, "app-server", "--stdio")
 	command.Env = withCodexHome(os.Environ(), codexHome)
@@ -80,6 +91,7 @@ func Start(ctx context.Context, codexPath, codexHome string) (*Client, error) {
 	return client, nil
 }
 
+// Close stops the App Server process.
 func (c *Client) Close() {
 	if c == nil || c.closed {
 		return
@@ -92,6 +104,9 @@ func (c *Client) Close() {
 	_ = c.command.Wait()
 }
 
+// List returns every thread, newest first, optionally limited to one cwd.
+// A normal listing lets Codex scan and repair its state from rollout files;
+// stateOnly reads only the persisted state database.
 func (c *Client) List(cwd string, stateOnly bool) ([]Thread, error) {
 	var result []Thread
 	var cursor any
@@ -125,6 +140,7 @@ func (c *Client) List(cwd string, stateOnly bool) ([]Thread, error) {
 	}
 }
 
+// Read returns the metadata of one thread without its turns.
 func (c *Client) Read(id string) (Thread, error) {
 	return c.threadResponse("thread/read", map[string]any{
 		"threadId":     id,
@@ -132,6 +148,7 @@ func (c *Client) Read(id string) (Thread, error) {
 	}, id)
 }
 
+// Resume loads a thread for continuation in cwd without starting a turn.
 func (c *Client) Resume(id, cwd string) (Thread, error) {
 	return c.threadResponse("thread/resume", map[string]any{
 		"threadId": id,
@@ -159,22 +176,27 @@ func (c *Client) threadResponse(method string, params map[string]any, id string)
 	return value.Thread, nil
 }
 
+// Delete removes a thread, including its rollout file and indexed state.
 func (c *Client) Delete(id string) error {
 	_, err := c.call("thread/delete", map[string]any{"threadId": id})
 	return err
 }
 
+// Archive moves a thread to the archived sessions store.
 func (c *Client) Archive(id string) error {
 	_, err := c.call("thread/archive", map[string]any{"threadId": id})
 	return err
 }
+
+// clientVersion is reported to the App Server during initialization.
+const clientVersion = "0.0.0"
 
 func (c *Client) initialize() error {
 	_, err := c.call("initialize", map[string]any{
 		"clientInfo": map[string]string{
 			"name":    "cxport",
 			"title":   "agent-teleport",
-			"version": "0.0.0",
+			"version": clientVersion,
 		},
 	})
 	if err != nil {
@@ -194,7 +216,7 @@ func (c *Client) call(method string, params any) (json.RawMessage, error) {
 		if err := json.Unmarshal(c.lines.Bytes(), &reply); err != nil {
 			return nil, fmt.Errorf("decode App Server message: %w", err)
 		}
-		if len(reply.ID) == 0 {
+		if len(reply.ID) == 0 || reply.Method != "" {
 			continue
 		}
 		var responseID int
@@ -229,7 +251,7 @@ func (c *Client) send(message any) error {
 }
 
 func (c *Client) stderrSuffix() string {
-	value := strings.TrimSpace(c.stderr.String())
+	value := strings.TrimSpace(c.stderr.buffer.String())
 	if value == "" {
 		return ""
 	}
@@ -244,4 +266,17 @@ func withCodexHome(environment []string, home string) []string {
 		}
 	}
 	return append(result, "CODEX_HOME="+home)
+}
+
+// limitedBuffer keeps the first maxStderrSize bytes of App Server diagnostics
+// and discards the rest, so a noisy server cannot grow memory without bound.
+type limitedBuffer struct {
+	buffer bytes.Buffer
+}
+
+func (b *limitedBuffer) Write(data []byte) (int, error) {
+	if remaining := maxStderrSize - b.buffer.Len(); remaining > 0 {
+		b.buffer.Write(data[:min(len(data), remaining)])
+	}
+	return len(data), nil
 }

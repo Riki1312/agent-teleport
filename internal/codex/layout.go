@@ -4,42 +4,30 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
-	"sort"
+	"slices"
 	"strings"
 )
 
+// eventKind identifies a rollout event by its type and, for wrapped events, the
+// type of its payload.
 type eventKind struct {
 	eventType   string
 	payloadType string
 }
 
-type AppServerCapabilities struct {
-	ScanRepair bool `json:"scan_repair"`
-	Read       bool `json:"read"`
-	Resume     bool `json:"resume"`
-	Delete     bool `json:"delete"`
+// layout describes the rollout format written by one Codex version.
+type layout struct {
+	// completeEvent is the event Codex writes when a turn completes.
+	completeEvent eventKind
+	// workspaceEvents carry the workspace metadata Codex reads when it rebuilds
+	// thread state from a rollout.
+	workspaceEvents map[eventKind]struct{}
 }
 
-type Compatibility struct {
-	Version               string
-	LayoutFingerprint     string
-	RolloutFilenameLayout string
-	AppServer             AppServerCapabilities
-	completeEvent         eventKind
-	workspaceEvents       map[eventKind]struct{}
-}
-
-var compatibilities = map[string]Compatibility{
+// layouts maps every supported Codex version to the rollout layout verified for
+// it by a sanitized fixture and the two-home transfer test.
+var layouts = map[string]layout{
 	"0.154.0": {
-		Version:               "0.154.0",
-		LayoutFingerprint:     "rollout-v1:task-complete:workspace-metadata-v1",
-		RolloutFilenameLayout: "date-partitioned-rollout-v1",
-		AppServer: AppServerCapabilities{
-			ScanRepair: true,
-			Read:       true,
-			Resume:     true,
-			Delete:     true,
-		},
 		completeEvent: eventKind{eventType: "event_msg", payloadType: "task_complete"},
 		workspaceEvents: map[eventKind]struct{}{
 			{eventType: "session_meta"}:                                      {},
@@ -50,25 +38,26 @@ var compatibilities = map[string]Compatibility{
 	},
 }
 
-func LookupCompatibility(version string) (Compatibility, error) {
-	compatibility, ok := compatibilities[version]
+func layoutFor(version string) (layout, error) {
+	layout, ok := layouts[version]
 	if !ok {
-		return Compatibility{}, fmt.Errorf(
-			"Codex %s is unsupported; supported versions: %s",
-			version,
-			strings.Join(SupportedVersions(), ", "),
-		)
+		return layout, fmt.Errorf("Codex %s is unsupported; supported versions: %s", version, strings.Join(supportedVersions(), ", "))
 	}
-	return compatibility, nil
+	return layout, nil
 }
 
-func SupportedVersions() []string {
-	versions := make([]string, 0, len(compatibilities))
-	for version := range compatibilities {
+func supportedVersions() []string {
+	versions := make([]string, 0, len(layouts))
+	for version := range layouts {
 		versions = append(versions, version)
 	}
-	sort.Strings(versions)
+	slices.Sort(versions)
 	return versions
+}
+
+func (l layout) isWorkspaceEvent(kind eventKind) bool {
+	_, ok := l.workspaceEvents[kind]
+	return ok
 }
 
 // classifyEvent decodes only the event and payload types of one rollout line.

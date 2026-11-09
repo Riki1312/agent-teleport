@@ -7,9 +7,11 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/Riki1312/agent-teleport/internal/appserver"
+	"github.com/Riki1312/agent-teleport/internal/codex/appserver"
 )
 
+// replacePhase names a persisted step of a replacement. Tests interrupt the
+// transaction after each phase to prove that recovery restores the old session.
 type replacePhase string
 
 const (
@@ -19,6 +21,7 @@ const (
 	phaseNewVerified replacePhase = "new-verified"
 )
 
+// interruptionError simulates a process exit at a replacement checkpoint.
 type interruptionError struct {
 	phase replacePhase
 }
@@ -27,11 +30,19 @@ func (e *interruptionError) Error() string {
 	return "simulated interruption after " + string(e.phase)
 }
 
+// resetThreadFunc deletes the session's thread state and rollout through Codex.
 type resetThreadFunc func() error
-type repairThreadFunc func(SessionMeta) error
+
+// repairThreadFunc lets Codex rebuild and verify thread state for meta from the
+// rollout file at its destination.
+type repairThreadFunc func(sessionMeta) error
+
+// checkpointFunc runs after each persisted replacement phase.
 type checkpointFunc func(replacePhase) error
 
-func ReplacementPending(destination string) (bool, error) {
+// replacementPending reports whether an interrupted replacement left a rollback
+// link or stage file for destination.
+func replacementPending(destination string) (bool, error) {
 	for _, path := range []string{rollbackPath(destination), stagePath(destination)} {
 		if _, err := os.Stat(path); err == nil {
 			return true, nil
@@ -42,7 +53,10 @@ func ReplacementPending(destination string) (bool, error) {
 	return false, nil
 }
 
-func (c Compatibility) RecoverReplacement(destination, sessionID string, reset resetThreadFunc, repair repairThreadFunc) error {
+// recoverReplacement rolls back any replacement of destination interrupted
+// before its commit point. Without a rollback link it only removes an abandoned
+// stage file.
+func (l layout) recoverReplacement(destination, sessionID string, reset resetThreadFunc, repair repairThreadFunc) error {
 	rollback := rollbackPath(destination)
 	if _, err := os.Stat(rollback); errors.Is(err, os.ErrNotExist) {
 		if err := removeIfExists(stagePath(destination)); err != nil {
@@ -52,38 +66,37 @@ func (c Compatibility) RecoverReplacement(destination, sessionID string, reset r
 	} else if err != nil {
 		return fmt.Errorf("inspect replacement rollback: %w", err)
 	}
-	return c.restoreRollback(destination, sessionID, reset, repair)
+	return l.restoreRollback(destination, sessionID, reset, repair)
 }
 
-func (c Compatibility) ReplaceRollout(
+// replaceRollout replaces the session at destination with replacement through a
+// recoverable transaction:
+//
+//  1. Recover any earlier interrupted replacement.
+//  2. Stage the replacement and hard-link the old rollout as a rollback copy.
+//  3. Delete the old thread through Codex, then move the staged rollout into place.
+//  4. Let Codex repair the new thread, then remove the rollback link to commit.
+//
+// Any failure before the commit point restores and repairs the old session.
+func (l layout) replaceRollout(
 	destination string,
 	replacement []byte,
-	meta SessionMeta,
-	reset resetThreadFunc,
-	repair repairThreadFunc,
-) error {
-	return c.replaceRollout(destination, replacement, meta, reset, repair, nil)
-}
-
-func (c Compatibility) replaceRollout(
-	destination string,
-	replacement []byte,
-	meta SessionMeta,
+	meta sessionMeta,
 	reset resetThreadFunc,
 	repair repairThreadFunc,
 	checkpoint checkpointFunc,
 ) error {
-	if err := c.RecoverReplacement(destination, meta.ID, reset, repair); err != nil {
+	if err := l.recoverReplacement(destination, meta.ID, reset, repair); err != nil {
 		return fmt.Errorf("recover interrupted replacement: %w", err)
 	}
-	_, oldMeta, err := c.StableRollout(destination)
+	_, oldMeta, err := l.stableRollout(destination)
 	if err != nil {
 		return fmt.Errorf("validate existing rollout: %w", err)
 	}
 	if oldMeta.ID != meta.ID {
 		return fmt.Errorf("existing rollout has session ID %s, want %s", oldMeta.ID, meta.ID)
 	}
-	replacementMeta, err := c.ValidateRollout(replacement)
+	replacementMeta, err := l.validateRollout(replacement)
 	if err != nil {
 		return fmt.Errorf("validate replacement rollout: %w", err)
 	}
@@ -106,14 +119,14 @@ func (c Compatibility) replaceRollout(
 		return fmt.Errorf("create replacement rollback link: %w", err)
 	}
 	if err := syncDirectory(filepath.Dir(destination)); err != nil {
-		return c.rollbackAfterError(destination, meta.ID, reset, repair, fmt.Errorf("sync replacement rollback: %w", err))
+		return l.rollbackAfterError(destination, meta.ID, reset, repair, fmt.Errorf("sync replacement rollback: %w", err))
 	}
 	if err := runCheckpoint(checkpoint, phaseBackedUp); err != nil {
 		return err
 	}
 
 	if err := reset(); err != nil {
-		return c.rollbackAfterError(destination, meta.ID, reset, repair, fmt.Errorf("delete existing Codex thread: %w", err))
+		return l.rollbackAfterError(destination, meta.ID, reset, repair, fmt.Errorf("delete existing Codex thread: %w", err))
 	}
 	if _, err := os.Stat(destination); !errors.Is(err, os.ErrNotExist) {
 		if err == nil {
@@ -121,25 +134,25 @@ func (c Compatibility) replaceRollout(
 		} else {
 			err = fmt.Errorf("inspect deleted rollout: %w", err)
 		}
-		return c.rollbackAfterError(destination, meta.ID, reset, repair, err)
+		return l.rollbackAfterError(destination, meta.ID, reset, repair, err)
 	}
 	if err := runCheckpoint(checkpoint, phaseStateReset); err != nil {
 		return err
 	}
 
 	if err := os.Rename(stage, destination); err != nil {
-		return c.rollbackAfterError(destination, meta.ID, reset, repair, fmt.Errorf("place replacement rollout: %w", err))
+		return l.rollbackAfterError(destination, meta.ID, reset, repair, fmt.Errorf("place replacement rollout: %w", err))
 	}
 	stageCommitted = true
 	if err := syncDirectory(filepath.Dir(destination)); err != nil {
-		return c.rollbackAfterError(destination, meta.ID, reset, repair, fmt.Errorf("sync replacement rollout: %w", err))
+		return l.rollbackAfterError(destination, meta.ID, reset, repair, fmt.Errorf("sync replacement rollout: %w", err))
 	}
 	if err := runCheckpoint(checkpoint, phaseNewPlaced); err != nil {
 		return err
 	}
 
 	if err := repair(meta); err != nil {
-		return c.rollbackAfterError(destination, meta.ID, reset, repair, fmt.Errorf("repair replacement thread: %w", err))
+		return l.rollbackAfterError(destination, meta.ID, reset, repair, fmt.Errorf("repair replacement thread: %w", err))
 	}
 	if err := runCheckpoint(checkpoint, phaseNewVerified); err != nil {
 		return err
@@ -153,21 +166,21 @@ func (c Compatibility) replaceRollout(
 	return nil
 }
 
-func (c Compatibility) rollbackAfterError(
+func (l layout) rollbackAfterError(
 	destination, sessionID string,
 	reset resetThreadFunc,
 	repair repairThreadFunc,
 	cause error,
 ) error {
-	if err := c.restoreRollback(destination, sessionID, reset, repair); err != nil {
+	if err := l.restoreRollback(destination, sessionID, reset, repair); err != nil {
 		return fmt.Errorf("%w; rollback failed: %v", cause, err)
 	}
 	return cause
 }
 
-func (c Compatibility) restoreRollback(destination, sessionID string, reset resetThreadFunc, repair repairThreadFunc) error {
+func (l layout) restoreRollback(destination, sessionID string, reset resetThreadFunc, repair repairThreadFunc) error {
 	rollback := rollbackPath(destination)
-	_, oldMeta, err := c.StableRollout(rollback)
+	_, oldMeta, err := l.stableRollout(rollback)
 	if err != nil {
 		return fmt.Errorf("validate rollback rollout: %w", err)
 	}
@@ -205,6 +218,7 @@ func runCheckpoint(checkpoint checkpointFunc, phase replacePhase) error {
 	return checkpoint(phase)
 }
 
+// writeExclusive creates path with owner-only permissions and syncs its content.
 func writeExclusive(path string, data []byte) error {
 	file, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
 	if err != nil {
@@ -246,6 +260,8 @@ func rollbackPath(destination string) string {
 	return destination + ".cxport-rollback"
 }
 
+// isMissingRollout reports whether Codex rejected a delete because the thread no
+// longer has a rollout, which recovery treats as already reset.
 func isMissingRollout(err error) bool {
 	var value *appserver.RPCError
 	return errors.As(err, &value) && value.Code == -32600 &&

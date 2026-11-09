@@ -44,3 +44,21 @@ func canonicalWorkspace(path string) (string, error) {
 		current = parent
 	}
 }
+
+// currentWorkspace returns the canonical current directory.
+func currentWorkspace() (string, error) {
+	cwd, err := os.Getwd()
+	if err != nil {
+		return "", fmt.Errorf("resolve current workspace: %w", err)
+	}
+	return canonicalWorkspace(cwd)
+}
+
+// targetWorkspace returns the canonical import workspace: path when given,
+// otherwise the current directory.
+func targetWorkspace(path string) (string, error) {
+	if path == "" {
+		return currentWorkspace()
+	}
+	return canonicalWorkspace(path)
+}

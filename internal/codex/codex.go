@@ -1,27 +1,237 @@
+// Package codex moves OpenAI Codex sessions in and out of agent-teleport
+// archives.
+//
+// Codex storage is a private, versioned implementation detail. The adapter
+// accepts only rollout layouts verified for the installed Codex version, and it
+// lets Codex App Server rebuild its own thread state instead of writing Codex
+// databases directly.
 package codex
 
 import (
-	"bytes"
-	"encoding/json"
+	"context"
 	"errors"
 	"fmt"
-	"io/fs"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
 	"time"
+
+	"github.com/Riki1312/agent-teleport/internal/archive"
+	"github.com/Riki1312/agent-teleport/internal/codex/appserver"
 )
 
+// Provider identifies Codex sessions in archive manifests.
 const Provider = "openai-codex"
 
-type SessionMeta struct {
-	ID        string
-	CWD       string
-	Timestamp time.Time
+// BinaryEnvironment names the variable that overrides the Codex binary path.
+const BinaryEnvironment = "CXPORT_CODEX"
+
+// rolloutPayload is the archive path of a session's rollout file.
+const rolloutPayload = "rollout.jsonl"
+
+// Store is the local Codex installation. It starts App Server on first use and
+// keeps it running until Close.
+type Store struct {
+	ctx     context.Context
+	binary  string
+	home    string
+	version string
+	layout  layout
+	client  *appserver.Client
 }
 
-func Home() (string, error) {
+// Session summarizes a local Codex session.
+type Session struct {
+	ID        string
+	Title     string
+	Workspace string
+	UpdatedAt time.Time
+
+	rolloutPath string
+	status      string
+}
+
+// Diagnosis describes the local Codex installation without changing it.
+type Diagnosis struct {
+	Home              string
+	Version           string
+	Supported         bool
+	SupportedVersions []string
+	AppServerError    error
+	DetectionError    error
+}
+
+// Open detects the local Codex installation and requires a supported version.
+func Open(ctx context.Context) (*Store, error) {
+	home, err := codexHome()
+	if err != nil {
+		return nil, err
+	}
+	binary := codexBinary()
+	version, err := detectVersion(ctx, binary)
+	if err != nil {
+		return nil, err
+	}
+	layout, err := layoutFor(version)
+	if err != nil {
+		return nil, err
+	}
+	return &Store{ctx: ctx, binary: binary, home: home, version: version, layout: layout}, nil
+}
+
+// Close stops App Server if the store started it.
+func (s *Store) Close() {
+	s.client.Close()
+	s.client = nil
+}
+
+// Version returns the installed Codex version.
+func (s *Store) Version() string {
+	return s.version
+}
+
+// Sessions lists local sessions, most recently updated first. An empty
+// workspace lists sessions from every workspace.
+func (s *Store) Sessions(workspace string) ([]Session, error) {
+	client, err := s.appServer()
+	if err != nil {
+		return nil, err
+	}
+	threads, err := client.List(workspace, false)
+	if err != nil {
+		return nil, fmt.Errorf("list Codex sessions: %w", err)
+	}
+	sessions := make([]Session, 0, len(threads))
+	for _, thread := range threads {
+		title := thread.Name
+		if title == "" {
+			title = thread.Preview
+		}
+		sessions = append(sessions, Session{
+			ID:          thread.ID,
+			Title:       strings.Join(strings.Fields(title), " "),
+			Workspace:   thread.CWD,
+			UpdatedAt:   time.Unix(thread.UpdatedAt, 0).UTC(),
+			rolloutPath: thread.Path,
+			status:      thread.Status.Type,
+		})
+	}
+	return sessions, nil
+}
+
+// Export snapshots a completed session into an archive created at now. It
+// fails while the session has an active or incomplete turn.
+func (s *Store) Export(session Session, now time.Time) (archive.Archive, error) {
+	if !isQuiescent(session.status) {
+		return archive.Archive{}, fmt.Errorf("session %s is not quiescent (status %q)", session.ID, session.status)
+	}
+	if session.rolloutPath == "" {
+		return archive.Archive{}, fmt.Errorf("Codex did not report a rollout path for session %s", session.ID)
+	}
+	rollout, meta, err := s.layout.stableRollout(session.rolloutPath)
+	if err != nil {
+		return archive.Archive{}, fmt.Errorf("snapshot session %s: %w", session.ID, err)
+	}
+	if meta.ID != session.ID {
+		return archive.Archive{}, fmt.Errorf("rollout session ID %s does not match selected session %s", meta.ID, session.ID)
+	}
+	return archive.New(archive.Header{
+		Provider:        Provider,
+		ProviderVersion: s.version,
+		SessionID:       meta.ID,
+		Workspace:       meta.CWD,
+		CreatedAt:       now,
+	}, []archive.Payload{{Path: rolloutPayload, Data: rollout}})
+}
+
+// ResumeCommand returns the Codex command that continues sessionID in
+// workspace.
+func (s *Store) ResumeCommand(sessionID, workspace string) *exec.Cmd {
+	command := exec.CommandContext(s.ctx, s.binary, "resume", sessionID)
+	command.Dir = workspace
+	return command
+}
+
+// ValidateArchive checks that a Codex archive is internally consistent for the
+// Codex version that wrote it. It needs no local Codex installation.
+func ValidateArchive(source archive.Archive) error {
+	_, _, err := validateArchive(source)
+	return err
+}
+
+// Diagnose reports the local Codex installation and whether App Server starts.
+func Diagnose(ctx context.Context) Diagnosis {
+	diagnosis := Diagnosis{SupportedVersions: supportedVersions()}
+	diagnosis.Home, diagnosis.DetectionError = codexHome()
+	if diagnosis.DetectionError != nil {
+		return diagnosis
+	}
+	binary := codexBinary()
+	diagnosis.Version, diagnosis.DetectionError = detectVersion(ctx, binary)
+	if diagnosis.DetectionError != nil {
+		return diagnosis
+	}
+	_, layoutErr := layoutFor(diagnosis.Version)
+	diagnosis.Supported = layoutErr == nil
+	client, err := appserver.Start(ctx, binary, diagnosis.Home)
+	if err == nil {
+		_, err = client.List("", true)
+		client.Close()
+	}
+	diagnosis.AppServerError = err
+	return diagnosis
+}
+
+func (s *Store) appServer() (*appserver.Client, error) {
+	if s.client != nil {
+		return s.client, nil
+	}
+	client, err := appserver.Start(s.ctx, s.binary, s.home)
+	if err != nil {
+		return nil, err
+	}
+	s.client = client
+	return client, nil
+}
+
+// validateArchive checks a Codex archive and returns its layout and rollout.
+func validateArchive(source archive.Archive) (layout, []byte, error) {
+	if source.Manifest.Provider != Provider {
+		return layout{}, nil, fmt.Errorf("archive provider %q is not %s", source.Manifest.Provider, Provider)
+	}
+	if len(source.Manifest.Files) != 1 {
+		return layout{}, nil, errors.New("Codex archive must contain exactly one rollout")
+	}
+	rollout, ok := source.Payload(rolloutPayload)
+	if !ok {
+		return layout{}, nil, fmt.Errorf("Codex archive is missing %s", rolloutPayload)
+	}
+	sourceLayout, err := layoutFor(source.Manifest.ProviderVersion)
+	if err != nil {
+		return layout{}, nil, err
+	}
+	meta, err := sourceLayout.validateRollout(rollout)
+	if err != nil {
+		return layout{}, nil, fmt.Errorf("validate rollout: %w", err)
+	}
+	if source.Manifest.SessionID != meta.ID {
+		return layout{}, nil, fmt.Errorf("manifest session ID %s does not match rollout %s", source.Manifest.SessionID, meta.ID)
+	}
+	if source.Manifest.Workspace != meta.CWD {
+		return layout{}, nil, fmt.Errorf("manifest workspace %s does not match rollout %s", source.Manifest.Workspace, meta.CWD)
+	}
+	return sourceLayout, rollout, nil
+}
+
+// isQuiescent reports whether an App Server status allows reading or replacing
+// a rollout. Another process's live session reports notLoaded, so callers also
+// require a completed final turn.
+func isQuiescent(status string) bool {
+	return status == "idle" || status == "notLoaded"
+}
+
+func codexHome() (string, error) {
 	if value := os.Getenv("CODEX_HOME"); value != "" {
 		return filepath.Abs(value)
 	}
@@ -32,292 +242,21 @@ func Home() (string, error) {
 	return filepath.Join(home, ".codex"), nil
 }
 
-func Version(codexPath string) (string, error) {
-	output, err := exec.Command(codexPath, "--version").Output()
+func codexBinary() string {
+	if value := os.Getenv(BinaryEnvironment); value != "" {
+		return value
+	}
+	return "codex"
+}
+
+func detectVersion(ctx context.Context, binary string) (string, error) {
+	output, err := exec.CommandContext(ctx, binary, "--version").Output()
 	if err != nil {
-		return "", fmt.Errorf("run %s --version: %w", codexPath, err)
+		return "", fmt.Errorf("run %s --version: %w", binary, err)
 	}
 	fields := strings.Fields(string(output))
 	if len(fields) != 2 || fields[0] != "codex-cli" {
 		return "", fmt.Errorf("unexpected Codex version output %q", strings.TrimSpace(string(output)))
 	}
 	return fields[1], nil
-}
-
-func (c Compatibility) StableRollout(path string) ([]byte, SessionMeta, error) {
-	before, err := os.Stat(path)
-	if err != nil {
-		return nil, SessionMeta{}, fmt.Errorf("stat rollout: %w", err)
-	}
-	if !before.Mode().IsRegular() {
-		return nil, SessionMeta{}, errors.New("rollout is not a regular file")
-	}
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return nil, SessionMeta{}, fmt.Errorf("read rollout: %w", err)
-	}
-	after, err := os.Stat(path)
-	if err != nil {
-		return nil, SessionMeta{}, fmt.Errorf("stat rollout after read: %w", err)
-	}
-	if before.Size() != after.Size() || !before.ModTime().Equal(after.ModTime()) {
-		return nil, SessionMeta{}, errors.New("rollout changed while it was being read")
-	}
-	meta, err := c.ValidateRollout(data)
-	if err != nil {
-		return nil, SessionMeta{}, err
-	}
-	return data, meta, nil
-}
-
-func (c Compatibility) ValidateRollout(data []byte) (SessionMeta, error) {
-	if len(data) == 0 || data[len(data)-1] != '\n' {
-		return SessionMeta{}, errors.New("rollout does not end with a complete JSONL record")
-	}
-	lines := bytes.Split(data[:len(data)-1], []byte{'\n'})
-	if len(lines) == 0 || len(lines[0]) == 0 {
-		return SessionMeta{}, errors.New("rollout has no session metadata")
-	}
-	var first struct {
-		Type    string `json:"type"`
-		Payload struct {
-			ID          string          `json:"id"`
-			SessionID   string          `json:"session_id"`
-			CWD         string          `json:"cwd"`
-			Timestamp   string          `json:"timestamp"`
-			HistoryBase json.RawMessage `json:"history_base"`
-		} `json:"payload"`
-	}
-	if err := json.Unmarshal(lines[0], &first); err != nil {
-		return SessionMeta{}, fmt.Errorf("decode session metadata: %w", err)
-	}
-	if first.Type != "session_meta" {
-		return SessionMeta{}, fmt.Errorf("first rollout event has type %q, want session_meta", first.Type)
-	}
-	if len(first.Payload.HistoryBase) != 0 && !bytes.Equal(bytes.TrimSpace(first.Payload.HistoryBase), []byte("null")) {
-		return SessionMeta{}, errors.New("rollout references an external history_base; single-file archives cannot preserve its dependencies")
-	}
-	if first.Payload.ID != "" && first.Payload.SessionID != "" && first.Payload.ID != first.Payload.SessionID {
-		return SessionMeta{}, errors.New("rollout has different thread and session IDs; this layout is not supported")
-	}
-	id := first.Payload.SessionID
-	if id == "" {
-		id = first.Payload.ID
-	}
-	if id == "" || first.Payload.CWD == "" || first.Payload.Timestamp == "" {
-		return SessionMeta{}, errors.New("session metadata is missing id, cwd, or timestamp")
-	}
-	if !validSessionID(id) {
-		return SessionMeta{}, fmt.Errorf("session ID %q is not a UUIDv7", id)
-	}
-	timestamp, err := time.Parse(time.RFC3339Nano, first.Payload.Timestamp)
-	if err != nil {
-		return SessionMeta{}, fmt.Errorf("parse session timestamp: %w", err)
-	}
-	for index, line := range lines[1:] {
-		if len(line) == 0 {
-			return SessionMeta{}, fmt.Errorf("rollout line %d is empty", index+2)
-		}
-		if !json.Valid(line) {
-			return SessionMeta{}, fmt.Errorf("rollout line %d is not valid JSON", index+2)
-		}
-	}
-	last, err := classifyEvent(lines[len(lines)-1])
-	if err != nil {
-		return SessionMeta{}, fmt.Errorf("decode final rollout event: %w", err)
-	}
-	if last != c.completeEvent {
-		return SessionMeta{}, errors.New("rollout does not end at a completed turn")
-	}
-	return SessionMeta{ID: id, CWD: first.Payload.CWD, Timestamp: timestamp}, nil
-}
-
-func validSessionID(id string) bool {
-	if len(id) != 36 || id[14] != '7' {
-		return false
-	}
-	for index := 0; index < len(id); index++ {
-		if index == 8 || index == 13 || index == 18 || index == 23 {
-			if id[index] != '-' {
-				return false
-			}
-			continue
-		}
-		character := id[index]
-		if !((character >= '0' && character <= '9') ||
-			(character >= 'a' && character <= 'f') ||
-			(character >= 'A' && character <= 'F')) {
-			return false
-		}
-	}
-	return true
-}
-
-// RemapWorkspace moves every workspace path in recognized metadata events from
-// the recorded workspace to targetCWD. Paths inside the workspace keep their
-// relative suffix. Only rewritten JSON strings change; all other bytes,
-// including recorded tool results, stay as recorded.
-func (c Compatibility) RemapWorkspace(data []byte, targetCWD string) ([]byte, SessionMeta, error) {
-	meta, err := c.ValidateRollout(data)
-	if err != nil {
-		return nil, SessionMeta{}, err
-	}
-	if !filepath.IsAbs(targetCWD) {
-		return nil, SessionMeta{}, errors.New("target workspace must be absolute")
-	}
-	lines := bytes.Split(data, []byte{'\n'})
-	remapped := 0
-	for index, line := range lines {
-		if len(line) == 0 {
-			continue
-		}
-		kind, err := classifyEvent(line)
-		if err != nil {
-			return nil, SessionMeta{}, fmt.Errorf("decode rollout line %d: %w", index+1, err)
-		}
-		if _, ok := c.workspaceEvents[kind]; !ok {
-			continue
-		}
-		rewritten, changed, err := remapPathStrings(line, meta.CWD, targetCWD)
-		if err != nil {
-			return nil, SessionMeta{}, fmt.Errorf("remap rollout line %d: %w", index+1, err)
-		}
-		lines[index] = rewritten
-		remapped += changed
-	}
-	if remapped == 0 {
-		return nil, SessionMeta{}, errors.New("rollout contains no recognized workspace metadata")
-	}
-	meta.CWD = targetCWD
-	return bytes.Join(lines, []byte{'\n'}), meta, nil
-}
-
-func (c Compatibility) RolloutPath(home string, meta SessionMeta) string {
-	timestamp := meta.Timestamp.UTC()
-	nameTime := timestamp.Format("2006-01-02T15-04-05")
-	name := fmt.Sprintf("rollout-%s-%s.jsonl", nameTime, meta.ID)
-	return filepath.Join(
-		home,
-		"sessions",
-		timestamp.Format("2006"),
-		timestamp.Format("01"),
-		timestamp.Format("02"),
-		name,
-	)
-}
-
-// ExistingRollouts returns every active or archived rollout file for sessionID.
-// Codex lists only active threads, so collision checks must inspect both stores.
-func ExistingRollouts(home, sessionID string) ([]string, error) {
-	suffix := "-" + sessionID + ".jsonl"
-	var paths []string
-	for _, root := range []string{filepath.Join(home, "sessions"), filepath.Join(home, "archived_sessions")} {
-		err := filepath.WalkDir(root, func(path string, entry fs.DirEntry, err error) error {
-			if err != nil {
-				if path == root && errors.Is(err, fs.ErrNotExist) {
-					return nil
-				}
-				return err
-			}
-			name := entry.Name()
-			if !entry.IsDir() && strings.HasPrefix(name, "rollout-") && strings.HasSuffix(name, suffix) {
-				paths = append(paths, path)
-			}
-			return nil
-		})
-		if err != nil {
-			return nil, fmt.Errorf("search existing rollouts: %w", err)
-		}
-	}
-	return paths, nil
-}
-
-// remapPathStrings rewrites each JSON string in line that is sourceCWD or a
-// path below it. A string that mentions sourceCWD in any other form fails
-// closed, because a partial remap would leave the session tied to the source.
-func remapPathStrings(line []byte, sourceCWD, targetCWD string) ([]byte, int, error) {
-	var output []byte
-	copied := 0
-	changed := 0
-	for start := 0; start < len(line); start++ {
-		if line[start] != '"' {
-			continue
-		}
-		end := stringTokenEnd(line, start)
-		if end < 0 {
-			return nil, 0, errors.New("unterminated JSON string")
-		}
-		token := line[start : end+1]
-		var value string
-		if err := json.Unmarshal(token, &value); err != nil {
-			return nil, 0, err
-		}
-		suffix, ok := strings.CutPrefix(value, sourceCWD)
-		if !ok || (suffix != "" && suffix[0] != '/') {
-			if mentionsPath(value, sourceCWD) {
-				return nil, 0, errors.New("workspace path appears in an unsupported form")
-			}
-			start = end
-			continue
-		}
-		encoded, err := encodeString(targetCWD + suffix)
-		if err != nil {
-			return nil, 0, err
-		}
-		output = append(output, line[copied:start]...)
-		output = append(output, encoded...)
-		copied = end + 1
-		changed++
-		start = end
-	}
-	if changed == 0 {
-		return line, 0, nil
-	}
-	return append(output, line[copied:]...), changed, nil
-}
-
-// stringTokenEnd returns the index of the quote closing the JSON string that
-// starts at start, or -1 when the string is unterminated.
-func stringTokenEnd(line []byte, start int) int {
-	for index := start + 1; index < len(line); index++ {
-		switch line[index] {
-		case '\\':
-			index++
-		case '"':
-			return index
-		}
-	}
-	return -1
-}
-
-// mentionsPath reports whether value contains path followed by a path boundary.
-func mentionsPath(value, path string) bool {
-	for offset := 0; ; {
-		found := strings.Index(value[offset:], path)
-		if found < 0 {
-			return false
-		}
-		next := offset + found + len(path)
-		if next == len(value) || !isPathNameByte(value[next]) {
-			return true
-		}
-		offset = offset + found + 1
-	}
-}
-
-func isPathNameByte(character byte) bool {
-	return character == '.' || character == '_' || character == '-' ||
-		(character >= '0' && character <= '9') ||
-		(character >= 'a' && character <= 'z') ||
-		(character >= 'A' && character <= 'Z')
-}
-
-func encodeString(value string) ([]byte, error) {
-	var output bytes.Buffer
-	encoder := json.NewEncoder(&output)
-	encoder.SetEscapeHTML(false)
-	if err := encoder.Encode(value); err != nil {
-		return nil, err
-	}
-	return bytes.TrimSuffix(output.Bytes(), []byte{'\n'}), nil
 }

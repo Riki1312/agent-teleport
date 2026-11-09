@@ -1,25 +1,26 @@
+// Package cli implements the command-line interface. It parses arguments,
+// selects sessions, and formats output; provider adapters own every storage
+// rule.
 package cli
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
+	"flag"
 	"fmt"
 	"io"
 	"os"
-	"os/exec"
-	"path/filepath"
 	"strings"
 	"text/tabwriter"
 	"time"
 	"unicode"
 
-	"github.com/Riki1312/agent-teleport/internal/appserver"
-	"github.com/Riki1312/agent-teleport/internal/bundle"
+	"github.com/Riki1312/agent-teleport/internal/archive"
 	"github.com/Riki1312/agent-teleport/internal/codex"
 )
 
+// App runs commands against injectable standard streams and clock.
 type App struct {
 	Stdin  io.Reader
 	Stdout io.Writer
@@ -27,23 +28,19 @@ type App struct {
 	Now    func() time.Time
 }
 
-const maxInputArchive = 513 << 20
-
+// UsageError reports invalid command-line usage; the process exits with status 2.
 type UsageError struct {
 	Message string
 }
 
 func (e *UsageError) Error() string { return e.Message }
 
+// New returns an App bound to the process streams and clock.
 func New() *App {
-	return &App{
-		Stdin:  os.Stdin,
-		Stdout: os.Stdout,
-		Stderr: os.Stderr,
-		Now:    time.Now,
-	}
+	return &App{Stdin: os.Stdin, Stdout: os.Stdout, Stderr: os.Stderr, Now: time.Now}
 }
 
+// Run executes the command named by args[0].
 func (a *App) Run(ctx context.Context, args []string) error {
 	if len(args) == 0 {
 		return &UsageError{Message: usage}
@@ -57,9 +54,9 @@ func (a *App) Run(ctx context.Context, args []string) error {
 	case "export":
 		return a.export(ctx, args[1:])
 	case "inspect":
-		return a.inspect(args[1:])
+		return a.inspect(ctx, args[1:])
 	case "import":
-		return a.importBundle(ctx, args[1:])
+		return a.importArchive(ctx, args[1:])
 	case "doctor":
 		return a.doctor(ctx, args[1:])
 	default:
@@ -79,819 +76,433 @@ Commands:
 Run "cxport <command> --help" for command options.
 `
 
+const (
+	listUsage    = "Usage: cxport list [--all] [--json]\n"
+	exportUsage  = "Usage: cxport export [SESSION] [--all] [--last] [-o PATH|-]\n"
+	inspectUsage = "Usage: cxport inspect <ARCHIVE|-> [--json]\n"
+	importUsage  = "Usage: cxport import <ARCHIVE|-> [--cwd PATH | --preserve-cwd] [--if-exists error|skip|replace] [--dry-run] [--resume]\n"
+	doctorUsage  = "Usage: cxport doctor [--json]\n"
+)
+
+// errHelp reports that a command printed its help and should succeed.
+var errHelp = errors.New("help requested")
+
+// sessionEntry is the stable JSON representation of a listed session.
+type sessionEntry struct {
+	Provider  string    `json:"provider"`
+	ID        string    `json:"id"`
+	Title     string    `json:"title"`
+	Workspace string    `json:"workspace"`
+	UpdatedAt time.Time `json:"updated_at"`
+}
+
 func (a *App) list(ctx context.Context, args []string) error {
-	var includeAll, asJSON bool
-	for _, arg := range args {
-		switch arg {
-		case "--all":
-			includeAll = true
-		case "--json":
-			asJSON = true
-		case "-h", "--help":
-			_, writeErr := fmt.Fprintln(a.Stdout, "Usage: cxport list [--all] [--json]")
-			return writeErr
-		default:
-			return &UsageError{Message: fmt.Sprintf("unknown list option %q", arg)}
-		}
+	set := newFlagSet("list")
+	includeAll := set.Bool("all", false, "")
+	asJSON := set.Bool("json", false, "")
+	positional, err := a.parse(set, args, listUsage)
+	if err != nil || len(positional) > 0 {
+		return usageOrHelp(err, "list accepts no arguments")
 	}
-	cwd, client, err := openCodex(ctx, includeAll)
+	store, err := codex.Open(ctx)
 	if err != nil {
 		return err
 	}
-	defer client.Close()
-	threads, err := client.List(cwd, false)
+	defer store.Close()
+	sessions, err := a.sessions(store, *includeAll)
 	if err != nil {
-		return fmt.Errorf("list Codex sessions: %w", err)
+		return err
 	}
-	if asJSON {
-		return writeJSON(a.Stdout, threads)
+	if *asJSON {
+		entries := make([]sessionEntry, 0, len(sessions))
+		for _, session := range sessions {
+			entries = append(entries, sessionEntry{
+				Provider:  codex.Provider,
+				ID:        session.ID,
+				Title:     session.Title,
+				Workspace: session.Workspace,
+				UpdatedAt: session.UpdatedAt,
+			})
+		}
+		return writeJSON(a.Stdout, entries)
 	}
 	writer := tabwriter.NewWriter(a.Stdout, 0, 4, 2, ' ', 0)
 	if _, err := fmt.Fprintln(writer, "UPDATED\tID\tWORKSPACE\tTITLE"); err != nil {
 		return err
 	}
-	for _, thread := range threads {
-		updated := time.Unix(thread.UpdatedAt, 0).UTC().Format(time.RFC3339)
-		if _, err := fmt.Fprintf(writer, "%s\t%s\t%s\t%s\n", updated, thread.ID, thread.CWD, title(thread)); err != nil {
+	for _, session := range sessions {
+		updated := session.UpdatedAt.Format(time.RFC3339)
+		if _, err := fmt.Fprintf(writer, "%s\t%s\t%s\t%s\n", updated, session.ID, session.Workspace, shorten(session.Title)); err != nil {
 			return err
 		}
 	}
 	return writer.Flush()
 }
 
-type exportOptions struct {
-	session string
-	last    bool
-	all     bool
-	output  string
-	help    bool
-}
-
 func (a *App) export(ctx context.Context, args []string) error {
-	options, err := parseExport(args)
+	set := newFlagSet("export")
+	last := set.Bool("last", false, "")
+	includeAll := set.Bool("all", false, "")
+	output := set.String("o", "", "")
+	set.StringVar(output, "output", "", "")
+	positional, err := a.parse(set, args, exportUsage)
 	if err != nil {
-		return err
+		return usageOrHelp(err, "")
 	}
-	if options.help {
-		_, err := fmt.Fprintln(a.Stdout, "Usage: cxport export [SESSION] [--all] [--last] [-o PATH|-]")
-		return err
+	if len(positional) > 1 {
+		return &UsageError{Message: "export accepts at most one session selector"}
 	}
-	if options.session == "" && !options.last {
+	selector := strings.Join(positional, "")
+	if selector == "" && !*last {
 		return &UsageError{Message: "export requires SESSION or --last (interactive picker is not implemented yet)"}
 	}
-	if options.session != "" && options.last {
+	if selector != "" && *last {
 		return &UsageError{Message: "SESSION and --last cannot be used together"}
 	}
 
-	home, err := codex.Home()
+	store, err := codex.Open(ctx)
 	if err != nil {
 		return err
 	}
-	compatibility, err := requireSupportedCodex(codexBinary())
+	defer store.Close()
+	sessions, err := a.sessions(store, *includeAll)
 	if err != nil {
 		return err
 	}
-	client, err := appserver.Start(ctx, codexBinary(), home)
+	session, err := selectSession(sessions, selector, *last)
 	if err != nil {
 		return err
 	}
-	defer client.Close()
-	cwd := ""
-	if !options.all {
-		cwd, err = currentWorkspace()
+	exported, err := store.Export(session, a.Now())
+	if err != nil {
+		return err
+	}
+	if *output == "-" {
+		encoded, err := exported.Encode()
 		if err != nil {
 			return err
 		}
-	}
-	threads, err := client.List(cwd, false)
-	if err != nil {
-		return fmt.Errorf("discover Codex sessions: %w", err)
-	}
-	thread, err := selectThread(threads, options.session, options.last)
-	if err != nil {
-		return err
-	}
-	if thread.Status.Type != "idle" && thread.Status.Type != "notLoaded" {
-		return fmt.Errorf("session %s is not quiescent (status %q)", thread.ID, thread.Status.Type)
-	}
-	if thread.Path == "" {
-		return fmt.Errorf("Codex did not report a rollout path for session %s", thread.ID)
-	}
-	rollout, meta, err := compatibility.StableRollout(thread.Path)
-	if err != nil {
-		return fmt.Errorf("snapshot session %s: %w", thread.ID, err)
-	}
-	if meta.ID != thread.ID {
-		return fmt.Errorf("rollout session ID %s does not match selected thread %s", meta.ID, thread.ID)
-	}
-	manifest := bundle.NewManifest(codex.Provider, compatibility.Version, meta.ID, meta.CWD, a.Now())
-	output := options.output
-	if output == "" {
-		output = defaultArchiveName(thread)
-	}
-	encoded, err := encodeArchive(manifest, rollout)
-	if err != nil {
-		return err
-	}
-	if output == "-" {
 		if _, err := a.Stdout.Write(encoded); err != nil {
 			return fmt.Errorf("write archive to stdout: %w", err)
 		}
-		_, err = fmt.Fprintf(a.Stderr, "exported %s\n", thread.ID)
+		_, err = fmt.Fprintf(a.Stderr, "exported %s\n", session.ID)
 		return err
 	}
-	if err := writeNewFile(output, encoded); err != nil {
+	path := *output
+	if path == "" {
+		path = defaultArchiveName(session)
+	}
+	if err := exported.WriteFile(path); err != nil {
 		return err
 	}
-	_, err = fmt.Fprintf(a.Stdout, "exported %s to %s\n", thread.ID, output)
+	_, err = fmt.Fprintf(a.Stdout, "exported %s to %s\n", session.ID, path)
 	return err
 }
 
-func (a *App) inspect(args []string) error {
-	var path string
-	var asJSON bool
-	for _, arg := range args {
-		switch arg {
-		case "--json":
-			asJSON = true
-		case "-h", "--help":
-			_, err := fmt.Fprintln(a.Stdout, "Usage: cxport inspect <ARCHIVE|-> [--json]")
-			return err
-		default:
-			if strings.HasPrefix(arg, "-") && arg != "-" {
-				return &UsageError{Message: fmt.Sprintf("unknown inspect option %q", arg)}
-			}
-			if path != "" {
-				return &UsageError{Message: "inspect accepts exactly one archive"}
-			}
-			path = arg
-		}
+// inspectReport is the JSON representation of inspect output.
+type inspectReport struct {
+	Manifest    archive.Manifest `json:"manifest"`
+	Importable  bool             `json:"importable"`
+	ImportError string           `json:"import_error,omitempty"`
+}
+
+func (a *App) inspect(ctx context.Context, args []string) error {
+	set := newFlagSet("inspect")
+	asJSON := set.Bool("json", false, "")
+	positional, err := a.parse(set, args, inspectUsage)
+	if err != nil || len(positional) != 1 {
+		return usageOrHelp(err, "inspect requires exactly one archive path or -")
 	}
-	if path == "" {
-		return &UsageError{Message: "inspect requires an archive path or -"}
-	}
-	archive, err := a.readBundle(path)
+	source, err := a.readArchive(positional[0])
 	if err != nil {
 		return err
 	}
-	if archive.Manifest.Provider != codex.Provider {
-		return fmt.Errorf("unsupported provider %q", archive.Manifest.Provider)
+	if err := codex.ValidateArchive(source); err != nil {
+		return err
 	}
-	if compatibility, compatibilityErr := codex.LookupCompatibility(archive.Manifest.ProviderVersion); compatibilityErr == nil {
-		meta, err := compatibility.ValidateRollout(archive.Rollout)
-		if err != nil {
-			return fmt.Errorf("validate rollout: %w", err)
-		}
-		if err := manifestMatches(archive.Manifest, meta); err != nil {
-			return err
-		}
+	report := inspectReport{Manifest: source.Manifest}
+	if importErr := a.checkImport(ctx, source); importErr != nil {
+		report.ImportError = importErr.Error()
+	} else {
+		report.Importable = true
 	}
-	if asJSON {
-		return writeJSON(a.Stdout, archive.Manifest)
+	if *asJSON {
+		return writeJSON(a.Stdout, report)
 	}
-	_, err = fmt.Fprintf(a.Stdout, "session: %s\nprovider: %s %s\ncreated: %s\nworkspace: %s\n",
-		archive.Manifest.SessionID,
-		archive.Manifest.Provider,
-		archive.Manifest.ProviderVersion,
-		archive.Manifest.CreatedAt.Format(time.RFC3339),
-		archive.Manifest.OriginalCWD,
+	importable := "yes"
+	if !report.Importable {
+		importable = "no: " + report.ImportError
+	}
+	_, err = fmt.Fprintf(a.Stdout, "session: %s\nprovider: %s %s\ncreated: %s\nworkspace: %s\nimportable here: %s\n",
+		source.Manifest.SessionID,
+		source.Manifest.Provider,
+		source.Manifest.ProviderVersion,
+		source.Manifest.CreatedAt.Format(time.RFC3339),
+		source.Manifest.Workspace,
+		importable,
 	)
 	return err
 }
 
-type importOptions struct {
-	archive     string
-	cwd         string
-	preserveCWD bool
-	ifExists    collisionPolicy
-	dryRun      bool
-	resume      bool
-	help        bool
+// checkImport dry-runs an import of source into the current directory.
+func (a *App) checkImport(ctx context.Context, source archive.Archive) error {
+	workspace, err := currentWorkspace()
+	if err != nil {
+		return err
+	}
+	store, err := codex.Open(ctx)
+	if err != nil {
+		return err
+	}
+	defer store.Close()
+	_, err = store.Import(codex.ImportRequest{Archive: source, Workspace: workspace, IfExists: codex.CollisionError, DryRun: true})
+	return err
 }
 
-type collisionPolicy string
+func (a *App) importArchive(ctx context.Context, args []string) error {
+	set := newFlagSet("import")
+	cwd := set.String("cwd", "", "")
+	preserveCWD := set.Bool("preserve-cwd", false, "")
+	ifExists := set.String("if-exists", string(codex.CollisionError), "")
+	dryRun := set.Bool("dry-run", false, "")
+	resume := set.Bool("resume", false, "")
+	positional, err := a.parse(set, args, importUsage)
+	if err != nil || len(positional) != 1 {
+		return usageOrHelp(err, "import requires exactly one archive path or -")
+	}
+	policy := codex.CollisionPolicy(*ifExists)
+	switch {
+	case *cwd != "" && *preserveCWD:
+		return &UsageError{Message: "--cwd and --preserve-cwd cannot be used together"}
+	case policy != codex.CollisionError && policy != codex.CollisionSkip && policy != codex.CollisionReplace:
+		return &UsageError{Message: "--if-exists must be error, skip, or replace"}
+	case *dryRun && *resume:
+		return &UsageError{Message: "--dry-run and --resume cannot be used together"}
+	}
 
-const (
-	collisionError   collisionPolicy = "error"
-	collisionSkip    collisionPolicy = "skip"
-	collisionReplace collisionPolicy = "replace"
-)
-
-func (a *App) importBundle(ctx context.Context, args []string) error {
-	options, err := parseImport(args)
+	source, err := a.readArchive(positional[0])
 	if err != nil {
 		return err
 	}
-	if options.help {
-		_, err := fmt.Fprintln(a.Stdout, "Usage: cxport import <ARCHIVE|-> [--cwd PATH | --preserve-cwd] [--if-exists error|skip|replace] [--dry-run] [--resume]")
-		return err
-	}
-	archive, err := a.readBundle(options.archive)
-	if err != nil {
-		return err
-	}
-	if archive.Manifest.Provider != codex.Provider {
-		return fmt.Errorf("unsupported provider %q", archive.Manifest.Provider)
-	}
-	sourceCompatibility, err := codex.LookupCompatibility(archive.Manifest.ProviderVersion)
-	if err != nil {
-		return err
-	}
-	sourceMeta, err := sourceCompatibility.ValidateRollout(archive.Rollout)
-	if err != nil {
-		return fmt.Errorf("validate rollout: %w", err)
-	}
-	if err := manifestMatches(archive.Manifest, sourceMeta); err != nil {
-		return err
-	}
-	targetCompatibility, err := requireSupportedCodex(codexBinary())
-	if err != nil {
-		return err
-	}
-	if sourceCompatibility.Version != targetCompatibility.Version {
-		return fmt.Errorf("archive Codex version %s is incompatible with installed version %s", sourceCompatibility.Version, targetCompatibility.Version)
-	}
-	if !targetCompatibility.AppServer.ScanRepair || !targetCompatibility.AppServer.Read {
-		return fmt.Errorf("Codex %s lacks verified App Server import capabilities", targetCompatibility.Version)
-	}
-	if options.ifExists == collisionReplace && !targetCompatibility.AppServer.Delete {
-		return fmt.Errorf("Codex %s lacks a verified App Server delete capability required by replace", targetCompatibility.Version)
-	}
-	targetCWD := options.cwd
-	if options.preserveCWD {
-		targetCWD = archive.Manifest.OriginalCWD
-	} else if targetCWD == "" {
-		targetCWD, err = currentWorkspace()
-	} else {
-		targetCWD, err = canonicalWorkspace(targetCWD)
-	}
-	if err != nil {
-		return fmt.Errorf("resolve target workspace: %w", err)
-	}
-	rollout := archive.Rollout
-	meta := sourceMeta
-	if targetCWD != sourceMeta.CWD {
-		rollout, meta, err = targetCompatibility.RemapWorkspace(archive.Rollout, targetCWD)
+	workspace := source.Manifest.Workspace
+	if !*preserveCWD {
+		workspace, err = targetWorkspace(*cwd)
 		if err != nil {
-			return fmt.Errorf("remap workspace: %w", err)
+			return fmt.Errorf("resolve target workspace: %w", err)
 		}
 	}
-
-	home, err := codex.Home()
+	store, err := codex.Open(ctx)
 	if err != nil {
 		return err
 	}
-	destination := targetCompatibility.RolloutPath(home, meta)
-	if options.dryRun {
-		return a.dryRunImport(home, destination, meta, targetCWD, options.ifExists)
-	}
-	client, err := appserver.Start(ctx, codexBinary(), home)
+	defer store.Close()
+	result, err := store.Import(codex.ImportRequest{Archive: source, Workspace: workspace, IfExists: policy, DryRun: *dryRun})
 	if err != nil {
 		return err
 	}
-	defer client.Close()
-	reset := func() error { return client.Delete(meta.ID) }
-	repair := func(repairMeta codex.SessionMeta) error {
-		return verifyRepair(client, repairMeta.ID, repairMeta.CWD)
-	}
-	if err := targetCompatibility.RecoverReplacement(destination, meta.ID, reset, repair); err != nil {
+	if *dryRun {
+		_, err = fmt.Fprintf(a.Stdout, "would %s %s into %s\n", dryRunVerb(result.Outcome), result.SessionID, result.Workspace)
 		return err
 	}
-	existing, err := codex.ExistingRollouts(home, meta.ID)
-	if err != nil {
+	if result.Outcome == codex.Skipped {
+		_, err = fmt.Fprintf(a.Stdout, "session %s already exists; skipped\n", result.SessionID)
 		return err
 	}
-	if len(existing) > 0 {
-		if options.ifExists == collisionSkip {
-			_, err := fmt.Fprintf(a.Stdout, "session %s already exists; skipped\n", meta.ID)
-			return err
-		}
-		if options.ifExists == collisionError {
-			return fmt.Errorf("session %s already exists", meta.ID)
-		}
-		if err := requireReplaceable(existing, destination, meta.ID); err != nil {
-			return err
-		}
-		threads, err := client.List("", false)
-		if err != nil {
-			return fmt.Errorf("check existing session: %w", err)
-		}
-		thread := findThread(threads, meta.ID)
-		if thread == nil {
-			return fmt.Errorf("Codex does not list existing session %s", meta.ID)
-		}
-		if thread.Status.Type != "idle" && thread.Status.Type != "notLoaded" {
-			return fmt.Errorf("existing session %s is not quiescent (status %q)", meta.ID, thread.Status.Type)
-		}
-		if err := targetCompatibility.ReplaceRollout(destination, rollout, meta, reset, repair); err != nil {
-			return fmt.Errorf("replace session %s: %w", meta.ID, err)
-		}
-		if _, err := fmt.Fprintf(a.Stdout, "replaced %s in %s\nresume with: codex resume %s\n", meta.ID, targetCWD, meta.ID); err != nil {
-			return err
-		}
-		return a.resumeIfRequested(ctx, options.resume, targetCWD, meta.ID)
-	}
-	if err := placeRollout(destination, rollout); err != nil {
+	if _, err := fmt.Fprintf(a.Stdout, "%s %s into %s\nresume with: codex resume %s\n", result.Outcome, result.SessionID, result.Workspace, result.SessionID); err != nil {
 		return err
 	}
-	if err := verifyRepair(client, meta.ID, targetCWD); err != nil {
-		cleanupErr := client.Delete(meta.ID)
-		if cleanupErr != nil {
-			return fmt.Errorf("repair imported session: %w; cleanup also failed: %v", err, cleanupErr)
-		}
-		return fmt.Errorf("repair imported session: %w", err)
-	}
-	if _, err := fmt.Fprintf(a.Stdout, "imported %s into %s\nresume with: codex resume %s\n", meta.ID, targetCWD, meta.ID); err != nil {
-		return err
-	}
-	return a.resumeIfRequested(ctx, options.resume, targetCWD, meta.ID)
-}
-
-func (a *App) dryRunImport(home, destination string, meta codex.SessionMeta, targetCWD string, policy collisionPolicy) error {
-	pending, err := codex.ReplacementPending(destination)
-	if err != nil {
-		return fmt.Errorf("inspect replacement recovery state: %w", err)
-	}
-	if pending {
-		return errors.New("an interrupted replacement requires recovery; rerun without --dry-run")
-	}
-	existing, err := codex.ExistingRollouts(home, meta.ID)
-	if err != nil {
-		return err
-	}
-	if len(existing) == 0 {
-		_, err := fmt.Fprintf(a.Stdout, "import valid: %s -> %s\n", meta.ID, targetCWD)
-		return err
-	}
-	switch policy {
-	case collisionSkip:
-		_, err = fmt.Fprintf(a.Stdout, "session %s already exists; would skip\n", meta.ID)
-		return err
-	case collisionReplace:
-		if err := requireReplaceable(existing, destination, meta.ID); err != nil {
-			return err
-		}
-		_, err = fmt.Fprintf(a.Stdout, "replacement valid: %s -> %s\n", meta.ID, targetCWD)
-		return err
-	default:
-		return fmt.Errorf("session %s already exists", meta.ID)
-	}
-}
-
-// requireReplaceable allows replacement only for one active rollout at the
-// expected destination; archived or moved copies must be handled in Codex.
-func requireReplaceable(existing []string, destination, sessionID string) error {
-	if len(existing) == 1 && filepath.Clean(existing[0]) == filepath.Clean(destination) {
+	if !*resume {
 		return nil
 	}
-	return fmt.Errorf("session %s exists at %s; restore or delete it in Codex before replacing it", sessionID, strings.Join(existing, ", "))
-}
-
-func (a *App) resumeIfRequested(ctx context.Context, resume bool, cwd, sessionID string) error {
-	if !resume {
-		return nil
-	}
-	command := exec.CommandContext(ctx, codexBinary(), "resume", sessionID)
-	command.Dir = cwd
-	command.Stdin = a.Stdin
-	command.Stdout = a.Stdout
-	command.Stderr = a.Stderr
-	if err := command.Run(); err != nil {
+	resumeCommand := store.ResumeCommand(result.SessionID, result.Workspace)
+	resumeCommand.Stdin, resumeCommand.Stdout, resumeCommand.Stderr = a.Stdin, a.Stdout, a.Stderr
+	if err := resumeCommand.Run(); err != nil {
 		return fmt.Errorf("resume imported session: %w", err)
 	}
 	return nil
 }
 
+func dryRunVerb(outcome codex.ImportOutcome) string {
+	switch outcome {
+	case codex.Replaced:
+		return "replace"
+	case codex.Skipped:
+		return "skip"
+	default:
+		return "import"
+	}
+}
+
+// doctorReport is the JSON representation of doctor output.
+type doctorReport struct {
+	CodexHome         string   `json:"codex_home"`
+	CodexVersion      string   `json:"codex_version,omitempty"`
+	Supported         bool     `json:"supported"`
+	SupportedVersions []string `json:"supported_versions"`
+	AppServer         bool     `json:"app_server"`
+	Error             string   `json:"error,omitempty"`
+}
+
 func (a *App) doctor(ctx context.Context, args []string) error {
-	var asJSON bool
-	for _, arg := range args {
-		switch arg {
-		case "--json":
-			asJSON = true
-		case "-h", "--help":
-			_, err := fmt.Fprintln(a.Stdout, "Usage: cxport doctor [--json]")
-			return err
-		default:
-			return &UsageError{Message: fmt.Sprintf("unknown doctor option %q", arg)}
-		}
+	set := newFlagSet("doctor")
+	asJSON := set.Bool("json", false, "")
+	positional, err := a.parse(set, args, doctorUsage)
+	if err != nil || len(positional) > 0 {
+		return usageOrHelp(err, "doctor accepts no arguments")
 	}
-	home, err := codex.Home()
-	if err != nil {
-		return err
+	diagnosis := codex.Diagnose(ctx)
+	report := doctorReport{
+		CodexHome:         diagnosis.Home,
+		CodexVersion:      diagnosis.Version,
+		Supported:         diagnosis.Supported,
+		SupportedVersions: diagnosis.SupportedVersions,
+		AppServer:         diagnosis.DetectionError == nil && diagnosis.AppServerError == nil,
 	}
-	version, versionErr := codex.Version(codexBinary())
-	report := struct {
-		CodexHome             string                      `json:"codex_home"`
-		CodexVersion          string                      `json:"codex_version,omitempty"`
-		Supported             bool                        `json:"supported"`
-		SupportedVersions     []string                    `json:"supported_versions"`
-		LayoutFingerprint     string                      `json:"layout_fingerprint,omitempty"`
-		RolloutFilenameLayout string                      `json:"rollout_filename_layout,omitempty"`
-		Capabilities          codex.AppServerCapabilities `json:"app_server_capabilities"`
-		AppServer             bool                        `json:"app_server"`
-		AppServerError        string                      `json:"app_server_error,omitempty"`
-		DetectionError        string                      `json:"detection_error,omitempty"`
-	}{CodexHome: home, CodexVersion: version, SupportedVersions: codex.SupportedVersions()}
-	if versionErr == nil {
-		compatibility, compatibilityErr := codex.LookupCompatibility(version)
-		if compatibilityErr == nil {
-			report.Supported = true
-			report.LayoutFingerprint = compatibility.LayoutFingerprint
-			report.RolloutFilenameLayout = compatibility.RolloutFilenameLayout
-			report.Capabilities = compatibility.AppServer
-		}
+	if diagnosis.DetectionError != nil {
+		report.Error = diagnosis.DetectionError.Error()
+	} else if diagnosis.AppServerError != nil {
+		report.Error = diagnosis.AppServerError.Error()
 	}
-	if versionErr != nil {
-		report.DetectionError = versionErr.Error()
-	} else {
-		client, startErr := appserver.Start(ctx, codexBinary(), home)
-		if startErr == nil {
-			_, startErr = client.List("", true)
-			client.Close()
-		}
-		report.AppServer = startErr == nil
-		if startErr != nil {
-			report.AppServerError = startErr.Error()
-		}
-	}
-	if asJSON {
+	if *asJSON {
 		return writeJSON(a.Stdout, report)
 	}
-	_, err = fmt.Fprintf(
-		a.Stdout,
-		"Codex home: %s\nCodex version: %s\nSupported: %t\nLayout: %s\nApp Server: %t\n",
-		home, version, report.Supported, report.LayoutFingerprint, report.AppServer,
-	)
-	if err != nil {
-		return err
-	}
-	if report.DetectionError != "" {
-		_, err = fmt.Fprintf(a.Stdout, "Detection error: %s\n", report.DetectionError)
-	} else if report.AppServerError != "" {
-		_, err = fmt.Fprintf(a.Stdout, "App Server error: %s\n", report.AppServerError)
+	_, err = fmt.Fprintf(a.Stdout, "Codex home: %s\nCodex version: %s\nSupported: %t (supported versions: %s)\nApp Server: %t\n",
+		report.CodexHome, report.CodexVersion, report.Supported, strings.Join(report.SupportedVersions, ", "), report.AppServer)
+	if err == nil && report.Error != "" {
+		_, err = fmt.Fprintf(a.Stdout, "Error: %s\n", report.Error)
 	}
 	return err
 }
 
-func parseExport(args []string) (exportOptions, error) {
-	var options exportOptions
-	for index := 0; index < len(args); index++ {
-		arg := args[index]
-		switch {
-		case arg == "--last":
-			options.last = true
-		case arg == "--all":
-			options.all = true
-		case arg == "-h" || arg == "--help":
-			options.help = true
-		case arg == "-o" || arg == "--output":
-			index++
-			if index >= len(args) {
-				return options, &UsageError{Message: arg + " requires a path"}
-			}
-			options.output = args[index]
-		case strings.HasPrefix(arg, "-o="):
-			options.output = strings.TrimPrefix(arg, "-o=")
-		case strings.HasPrefix(arg, "--output="):
-			options.output = strings.TrimPrefix(arg, "--output=")
-		case strings.HasPrefix(arg, "-"):
-			return options, &UsageError{Message: fmt.Sprintf("unknown export option %q", arg)}
-		case options.session == "":
-			options.session = arg
-		default:
-			return options, &UsageError{Message: "export accepts at most one session selector"}
-		}
-	}
-	return options, nil
+func newFlagSet(name string) *flag.FlagSet {
+	set := flag.NewFlagSet(name, flag.ContinueOnError)
+	set.SetOutput(io.Discard)
+	return set
 }
 
-func parseImport(args []string) (importOptions, error) {
-	options := importOptions{ifExists: collisionError}
-	for index := 0; index < len(args); index++ {
-		arg := args[index]
-		switch {
-		case arg == "--preserve-cwd":
-			options.preserveCWD = true
-		case arg == "--dry-run":
-			options.dryRun = true
-		case arg == "--resume":
-			options.resume = true
-		case arg == "-h" || arg == "--help":
-			options.help = true
-		case arg == "--cwd" || arg == "--if-exists":
-			index++
-			if index >= len(args) {
-				return options, &UsageError{Message: arg + " requires a value"}
+// parse parses flags anywhere among the arguments and returns the positional
+// arguments in order. It prints commandUsage and returns errHelp for -h.
+func (a *App) parse(set *flag.FlagSet, args []string, commandUsage string) ([]string, error) {
+	var positional []string
+	for {
+		if err := set.Parse(args); err != nil {
+			if errors.Is(err, flag.ErrHelp) {
+				if _, writeErr := fmt.Fprint(a.Stdout, commandUsage); writeErr != nil {
+					return nil, writeErr
+				}
+				return nil, errHelp
 			}
-			if arg == "--cwd" {
-				options.cwd = args[index]
-			} else {
-				options.ifExists = collisionPolicy(args[index])
-			}
-		case strings.HasPrefix(arg, "--cwd="):
-			options.cwd = strings.TrimPrefix(arg, "--cwd=")
-		case strings.HasPrefix(arg, "--if-exists="):
-			options.ifExists = collisionPolicy(strings.TrimPrefix(arg, "--if-exists="))
-		case strings.HasPrefix(arg, "-") && arg != "-":
-			return options, &UsageError{Message: fmt.Sprintf("unknown import option %q", arg)}
-		case options.archive == "":
-			options.archive = arg
-		default:
-			return options, &UsageError{Message: "import accepts exactly one archive"}
+			return nil, &UsageError{Message: fmt.Sprintf("%v\n%s", err, commandUsage)}
 		}
+		args = set.Args()
+		if len(args) == 0 {
+			return positional, nil
+		}
+		positional = append(positional, args[0])
+		args = args[1:]
 	}
-	if options.help {
-		return options, nil
-	}
-	if options.archive == "" {
-		return options, &UsageError{Message: "import requires an archive path or -"}
-	}
-	if options.cwd != "" && options.preserveCWD {
-		return options, &UsageError{Message: "--cwd and --preserve-cwd cannot be used together"}
-	}
-	if options.ifExists != collisionError && options.ifExists != collisionSkip && options.ifExists != collisionReplace {
-		return options, &UsageError{Message: "--if-exists must be error, skip, or replace"}
-	}
-	if options.dryRun && options.resume {
-		return options, &UsageError{Message: "--dry-run and --resume cannot be used together"}
-	}
-	return options, nil
 }
 
-func openCodex(ctx context.Context, includeAll bool) (string, *appserver.Client, error) {
-	home, err := codex.Home()
+// usageOrHelp turns a parse result into the command's return value: help
+// succeeds, parse errors pass through, and otherwise message is a usage error.
+func usageOrHelp(err error, message string) error {
+	if errors.Is(err, errHelp) {
+		return nil
+	}
 	if err != nil {
-		return "", nil, err
+		return err
 	}
-	if _, err := requireSupportedCodex(codexBinary()); err != nil {
-		return "", nil, err
-	}
-	cwd := ""
+	return &UsageError{Message: message}
+}
+
+func (a *App) sessions(store *codex.Store, includeAll bool) ([]codex.Session, error) {
+	workspace := ""
 	if !includeAll {
-		cwd, err = currentWorkspace()
-		if err != nil {
-			return "", nil, err
+		var err error
+		if workspace, err = currentWorkspace(); err != nil {
+			return nil, err
 		}
 	}
-	client, err := appserver.Start(ctx, codexBinary(), home)
-	if err != nil {
-		return "", nil, err
-	}
-	return cwd, client, nil
+	return store.Sessions(workspace)
 }
 
-func currentWorkspace() (string, error) {
-	cwd, err := os.Getwd()
-	if err != nil {
-		return "", fmt.Errorf("resolve current workspace: %w", err)
-	}
-	return canonicalWorkspace(cwd)
-}
-
-func codexBinary() string {
-	if value := os.Getenv("CXPORT_CODEX"); value != "" {
-		return value
-	}
-	return "codex"
-}
-
-func requireSupportedCodex(path string) (codex.Compatibility, error) {
-	version, err := codex.Version(path)
-	if err != nil {
-		return codex.Compatibility{}, err
-	}
-	return codex.LookupCompatibility(version)
-}
-
-func selectThread(threads []appserver.Thread, selector string, last bool) (appserver.Thread, error) {
+func selectSession(sessions []codex.Session, selector string, last bool) (codex.Session, error) {
 	if last {
-		if len(threads) == 0 {
-			return appserver.Thread{}, errors.New("no Codex sessions found")
+		if len(sessions) == 0 {
+			return codex.Session{}, errors.New("no sessions found")
 		}
-		return threads[0], nil
+		return sessions[0], nil
 	}
-	var matches []appserver.Thread
-	for _, thread := range threads {
-		if thread.ID == selector || strings.HasPrefix(thread.ID, selector) || thread.Name == selector {
-			matches = append(matches, thread)
+	var matches []codex.Session
+	for _, session := range sessions {
+		if strings.HasPrefix(session.ID, selector) || session.Title == selector {
+			matches = append(matches, session)
 		}
 	}
 	if len(matches) == 0 {
-		return appserver.Thread{}, fmt.Errorf("no session matches %q", selector)
+		return codex.Session{}, fmt.Errorf("no session matches %q", selector)
 	}
 	if len(matches) > 1 {
-		return appserver.Thread{}, fmt.Errorf("session selector %q is ambiguous", selector)
+		return codex.Session{}, fmt.Errorf("session selector %q is ambiguous", selector)
 	}
 	return matches[0], nil
 }
 
-func findThread(threads []appserver.Thread, id string) *appserver.Thread {
-	for index := range threads {
-		if threads[index].ID == id {
-			return &threads[index]
-		}
-	}
-	return nil
-}
-
-func title(thread appserver.Thread) string {
-	value := thread.Name
-	if value == "" {
-		value = thread.Preview
-	}
-	value = strings.Join(strings.Fields(value), " ")
-	runes := []rune(value)
+// shorten limits a title to one table cell.
+func shorten(title string) string {
+	runes := []rune(title)
 	if len(runes) > 72 {
-		value = string(runes[:69]) + "..."
+		return string(runes[:69]) + "..."
 	}
-	return value
+	return title
 }
 
-func defaultArchiveName(thread appserver.Thread) string {
-	value := title(thread)
-	if value == "" {
-		value = "codex-session"
-	}
-	var output strings.Builder
+func defaultArchiveName(session codex.Session) string {
+	var name strings.Builder
 	lastWasDash := false
-	for _, character := range strings.ToLower(value) {
+	for _, character := range strings.ToLower(session.Title) {
 		if unicode.IsLetter(character) || unicode.IsDigit(character) {
-			output.WriteRune(character)
+			name.WriteRune(character)
 			lastWasDash = false
-		} else if output.Len() > 0 && !lastWasDash {
-			output.WriteByte('-')
+		} else if name.Len() > 0 && !lastWasDash {
+			name.WriteByte('-')
 			lastWasDash = true
 		}
-		if output.Len() >= 48 {
+		if name.Len() >= 48 {
 			break
 		}
 	}
-	base := strings.Trim(output.String(), "-")
+	base := strings.Trim(name.String(), "-")
 	if base == "" {
-		base = "codex-session"
+		base = "session"
 	}
-	shortID := thread.ID
+	shortID := session.ID
 	if len(shortID) > 8 {
 		shortID = shortID[:8]
 	}
-	return fmt.Sprintf("%s-%s.cxport", base, shortID)
+	return fmt.Sprintf("%s-%s%s", base, shortID, archive.Extension)
 }
 
-// encodeArchive builds and verifies the complete archive before any output is
-// written, so a failed export never emits a partial archive.
-func encodeArchive(manifest bundle.Manifest, rollout []byte) ([]byte, error) {
-	var encoded bytes.Buffer
-	if err := bundle.Write(&encoded, manifest, rollout); err != nil {
-		return nil, err
-	}
-	if _, err := bundle.Read(bytes.NewReader(encoded.Bytes())); err != nil {
-		return nil, fmt.Errorf("verify completed archive: %w", err)
-	}
-	return encoded.Bytes(), nil
-}
-
-// writeNewFile creates path with owner-only permissions without replacing an
-// existing file. It avoids hard links, which removable FAT and exFAT drives
-// do not support, and removes the file again when writing fails.
-func writeNewFile(path string, data []byte) error {
-	file, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
-	if errors.Is(err, os.ErrExist) {
-		return fmt.Errorf("output already exists: %s", path)
-	}
-	if err != nil {
-		return fmt.Errorf("create archive: %w", err)
-	}
-	_, err = file.Write(data)
-	if err == nil {
-		err = file.Sync()
-	}
-	if closeErr := file.Close(); err == nil {
-		err = closeErr
-	}
-	if err != nil {
-		_ = os.Remove(path)
-		return fmt.Errorf("write archive: %w", err)
-	}
-	return nil
-}
-
-func (a *App) readBundle(path string) (bundle.Bundle, error) {
+// readArchive decodes an archive from path, or from stdin when path is "-".
+// Decoding validates the whole archive in memory before any import starts.
+func (a *App) readArchive(path string) (archive.Archive, error) {
 	if path == "-" {
-		temporary, err := os.CreateTemp("", "cxport-import-*.cxport")
+		decoded, err := archive.Decode(a.Stdin)
 		if err != nil {
-			return bundle.Bundle{}, fmt.Errorf("create private import spool: %w", err)
+			return archive.Archive{}, fmt.Errorf("read archive from stdin: %w", err)
 		}
-		temporaryPath := temporary.Name()
-		defer os.Remove(temporaryPath)
-		if err := temporary.Chmod(0o600); err != nil {
-			temporary.Close()
-			return bundle.Bundle{}, fmt.Errorf("protect import spool: %w", err)
-		}
-		written, err := io.Copy(temporary, io.LimitReader(a.Stdin, maxInputArchive+1))
-		if err != nil {
-			temporary.Close()
-			return bundle.Bundle{}, fmt.Errorf("spool archive from stdin: %w", err)
-		}
-		if written > maxInputArchive {
-			temporary.Close()
-			return bundle.Bundle{}, errors.New("archive from stdin exceeds its size limit")
-		}
-		if _, err := temporary.Seek(0, io.SeekStart); err != nil {
-			temporary.Close()
-			return bundle.Bundle{}, fmt.Errorf("rewind import spool: %w", err)
-		}
-		archive, err := bundle.Read(temporary)
-		closeErr := temporary.Close()
-		if err != nil {
-			return bundle.Bundle{}, fmt.Errorf("read archive from stdin: %w", err)
-		}
-		if closeErr != nil {
-			return bundle.Bundle{}, fmt.Errorf("close import spool: %w", closeErr)
-		}
-		return archive, nil
+		return decoded, nil
 	}
 	file, err := os.Open(path)
 	if err != nil {
-		return bundle.Bundle{}, fmt.Errorf("open archive: %w", err)
+		return archive.Archive{}, fmt.Errorf("open archive: %w", err)
 	}
 	defer file.Close()
-	archive, err := bundle.Read(file)
+	decoded, err := archive.Decode(file)
 	if err != nil {
-		return bundle.Bundle{}, fmt.Errorf("read archive: %w", err)
+		return archive.Archive{}, fmt.Errorf("read archive: %w", err)
 	}
-	return archive, nil
-}
-
-func manifestMatches(manifest bundle.Manifest, meta codex.SessionMeta) error {
-	if manifest.SessionID != meta.ID {
-		return fmt.Errorf("manifest session ID %s does not match rollout %s", manifest.SessionID, meta.ID)
-	}
-	if manifest.OriginalCWD != meta.CWD {
-		return fmt.Errorf("manifest workspace %s does not match rollout %s", manifest.OriginalCWD, meta.CWD)
-	}
-	return nil
-}
-
-func placeRollout(destination string, rollout []byte) error {
-	directory := filepath.Dir(destination)
-	if err := os.MkdirAll(directory, 0o700); err != nil {
-		return fmt.Errorf("create session directory: %w", err)
-	}
-	temporary, err := os.CreateTemp(directory, ".cxport-rollout-*")
-	if err != nil {
-		return fmt.Errorf("create staged rollout: %w", err)
-	}
-	temporaryPath := temporary.Name()
-	defer os.Remove(temporaryPath)
-	if err := temporary.Chmod(0o600); err != nil {
-		temporary.Close()
-		return err
-	}
-	if _, err := temporary.Write(rollout); err != nil {
-		temporary.Close()
-		return fmt.Errorf("write staged rollout: %w", err)
-	}
-	if err := temporary.Sync(); err != nil {
-		temporary.Close()
-		return fmt.Errorf("sync staged rollout: %w", err)
-	}
-	if err := temporary.Close(); err != nil {
-		return fmt.Errorf("close staged rollout: %w", err)
-	}
-	if err := os.Link(temporaryPath, destination); err != nil {
-		if errors.Is(err, os.ErrExist) {
-			return fmt.Errorf("rollout destination already exists: %s", destination)
-		}
-		return fmt.Errorf("commit rollout: %w", err)
-	}
-	return nil
-}
-
-func verifyRepair(client *appserver.Client, id, cwd string) error {
-	threads, err := client.List("", false)
-	if err != nil {
-		return err
-	}
-	thread := findThread(threads, id)
-	if thread == nil {
-		return errors.New("App Server did not discover the imported session")
-	}
-	stateThreads, err := client.List("", true)
-	if err != nil {
-		return err
-	}
-	stateThread := findThread(stateThreads, id)
-	if stateThread == nil {
-		return errors.New("App Server did not persist the imported session")
-	}
-	readThread, err := client.Read(id)
-	if err != nil {
-		return err
-	}
-	if thread.CWD != cwd || stateThread.CWD != cwd || readThread.CWD != cwd {
-		return fmt.Errorf("repaired workspace does not match target %q (scan %q, state %q, read %q)", cwd, thread.CWD, stateThread.CWD, readThread.CWD)
-	}
-	return nil
+	return decoded, nil
 }
 
 func writeJSON(output io.Writer, value any) error {

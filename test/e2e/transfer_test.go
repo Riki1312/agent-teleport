@@ -11,15 +11,16 @@ import (
 	"runtime"
 	"strings"
 	"testing"
+	"time"
 
-	"github.com/Riki1312/agent-teleport/internal/appserver"
-	"github.com/Riki1312/agent-teleport/internal/bundle"
+	"github.com/Riki1312/agent-teleport/internal/archive"
 	"github.com/Riki1312/agent-teleport/internal/codex"
+	"github.com/Riki1312/agent-teleport/internal/codex/appserver"
 )
 
 func TestTwoHomeTransfer(t *testing.T) {
-	codexPath, compatibility := requireCodex(t)
 	binary := buildCXPort(t)
+	codexPath, version := requireCodex(t, binary)
 	work := testWorkDir(t)
 	sourceHome := mkdir(t, filepath.Join(work, "source-home"))
 	sourceCWD := mkdir(t, filepath.Join(work, "source-workspace"))
@@ -32,32 +33,32 @@ func TestTwoHomeTransfer(t *testing.T) {
 	replacementCWD := mkdir(t, filepath.Join(work, "replacement-workspace"))
 	pipeHome := mkdir(t, filepath.Join(work, "pipe-home"))
 	pipeCWD := mkdir(t, filepath.Join(work, "pipe-workspace"))
-	fixture := loadFixture(t, compatibility, sourceHome, sourceCWD)
+	fixture := seedFixture(t, binary, codexPath, version, work, sourceHome, sourceCWD)
 
 	assertListedCWD(t, run(t, binary, codexPath, sourceHome, nil, true,
-		"list", "--all", "--json"), fixture.Meta.ID, sourceCWD)
+		"list", "--all", "--json"), fixture.ID, sourceCWD)
 
 	archivePath := filepath.Join(work, "session.cxport")
 	run(t, binary, codexPath, sourceHome, nil, true,
-		"export", "--all", fixture.Meta.ID, "-o", archivePath)
+		"export", "--all", fixture.ID, "-o", archivePath)
 	archiveFile, err := os.Open(archivePath)
 	if err != nil {
 		t.Fatal(err)
 	}
-	archive, err := bundle.Read(archiveFile)
+	exportedArchive, err := archive.Decode(archiveFile)
 	archiveFile.Close()
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !bytes.Equal(archive.Rollout, fixture.Data) {
-		t.Fatal("export did not preserve fixture rollout bytes")
+	if rollout, _ := exportedArchive.Payload("rollout.jsonl"); !bytes.Equal(rollout, fixture.Data) {
+		t.Fatal("export did not preserve the stored rollout bytes")
 	}
 	run(t, binary, codexPath, sourceHome, nil, true, "inspect", archivePath, "--json")
 
 	run(t, binary, codexPath, targetHome, nil, true,
 		"import", archivePath, "--cwd", targetAlias)
 	assertListedCWD(t, run(t, binary, codexPath, targetHome, nil, true,
-		"list", "--all", "--json"), fixture.Meta.ID, targetCWD)
+		"list", "--all", "--json"), fixture.ID, targetCWD)
 	run(t, binary, codexPath, targetHome, nil, false,
 		"import", archivePath, "--cwd", targetCWD)
 	run(t, binary, codexPath, targetHome, nil, true,
@@ -65,9 +66,9 @@ func TestTwoHomeTransfer(t *testing.T) {
 	run(t, binary, codexPath, targetHome, nil, true,
 		"import", archivePath, "--cwd", replacementCWD, "--if-exists", "replace")
 	assertListedCWD(t, run(t, binary, codexPath, targetHome, nil, true,
-		"list", "--all", "--json"), fixture.Meta.ID, replacementCWD)
+		"list", "--all", "--json"), fixture.ID, replacementCWD)
 
-	destination := compatibility.RolloutPath(targetHome, fixture.Meta)
+	destination := filepath.Join(targetHome, strings.TrimPrefix(fixture.Path, sourceHome))
 	if err := os.Link(destination, destination+".cxport-rollback"); err != nil {
 		t.Fatalf("simulate interrupted replacement: %v", err)
 	}
@@ -77,13 +78,13 @@ func TestTwoHomeTransfer(t *testing.T) {
 	assertMissing(t, destination+".cxport-stage")
 
 	exported := run(t, binary, codexPath, sourceHome, nil, true,
-		"export", "--all", fixture.Meta.ID, "-o", "-")
+		"export", "--all", fixture.ID, "-o", "-")
 	run(t, binary, codexPath, pipeHome, exported, true,
 		"import", "-", "--cwd", pipeCWD)
 	assertListedCWD(t, run(t, binary, codexPath, pipeHome, nil, true,
-		"list", "--all", "--json"), fixture.Meta.ID, pipeCWD)
+		"list", "--all", "--json"), fixture.ID, pipeCWD)
 
-	archiveSession(t, codexPath, pipeHome, fixture.Meta.ID)
+	archiveSession(t, codexPath, pipeHome, fixture.ID)
 	archived := filepath.Join(pipeHome, "archived_sessions", filepath.Base(destination))
 	run(t, binary, codexPath, pipeHome, nil, false,
 		"import", archivePath, "--cwd", pipeCWD)
@@ -100,7 +101,7 @@ func TestTwoHomeTransfer(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer client.Close()
-	resumed, err := client.Resume(fixture.Meta.ID, replacementCWD)
+	resumed, err := client.Resume(fixture.ID, replacementCWD)
 	if err != nil {
 		t.Fatalf("resume imported fixture: %v", err)
 	}
@@ -122,48 +123,76 @@ func archiveSession(t *testing.T, codexPath, home, sessionID string) {
 }
 
 type rolloutFixture struct {
+	ID   string
+	Path string
 	Data []byte
-	Meta codex.SessionMeta
 }
 
-func loadFixture(t *testing.T, compatibility codex.Compatibility, home, cwd string) rolloutFixture {
+// seedFixture imports the sanitized fixture for version into home through the
+// CLI, mapped to cwd, and returns the rollout Codex stored.
+func seedFixture(t *testing.T, binary, codexPath, version, work, home, cwd string) rolloutFixture {
 	t.Helper()
-	data, err := os.ReadFile(filepath.Join(
-		moduleRoot(t),
-		"testdata", "codex", compatibility.Version, "rollout.jsonl",
-	))
+	data, err := os.ReadFile(filepath.Join(moduleRoot(t), "testdata", "codex", version, "rollout.jsonl"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	data, meta, err := compatibility.RemapWorkspace(data, cwd)
+	firstLine, _, _ := bytes.Cut(data, []byte{'\n'})
+	var first struct {
+		Payload struct {
+			ID  string `json:"id"`
+			CWD string `json:"cwd"`
+		} `json:"payload"`
+	}
+	if err := json.Unmarshal(firstLine, &first); err != nil {
+		t.Fatal(err)
+	}
+	fixtureArchive, err := archive.New(archive.Header{
+		Provider:        codex.Provider,
+		ProviderVersion: version,
+		SessionID:       first.Payload.ID,
+		Workspace:       first.Payload.CWD,
+		CreatedAt:       time.Now(),
+	}, []archive.Payload{{Path: "rollout.jsonl", Data: data}})
 	if err != nil {
 		t.Fatal(err)
 	}
-	path := compatibility.RolloutPath(home, meta)
-	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+	archivePath := filepath.Join(work, "fixture"+archive.Extension)
+	if err := fixtureArchive.WriteFile(archivePath); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(path, data, 0o600); err != nil {
+	run(t, binary, codexPath, home, nil, true, "import", archivePath, "--cwd", cwd)
+	paths, err := filepath.Glob(filepath.Join(home, "sessions", "*", "*", "*", "rollout-*-"+first.Payload.ID+".jsonl"))
+	if err != nil || len(paths) != 1 {
+		t.Fatalf("locate seeded rollout: %q, %v", paths, err)
+	}
+	stored, err := os.ReadFile(paths[0])
+	if err != nil {
 		t.Fatal(err)
 	}
-	return rolloutFixture{Data: data, Meta: meta}
+	return rolloutFixture{ID: first.Payload.ID, Path: paths[0], Data: stored}
 }
 
-func requireCodex(t *testing.T) (string, codex.Compatibility) {
+// requireCodex returns the installed Codex binary and version when the built
+// CLI reports it as supported.
+func requireCodex(t *testing.T, binary string) (string, string) {
 	t.Helper()
 	path, err := exec.LookPath("codex")
 	if err != nil {
 		skipOrFail(t, "Codex CLI is not installed")
 	}
-	version, err := codex.Version(path)
-	if err != nil {
-		skipOrFail(t, err.Error())
+	var report struct {
+		CodexVersion string `json:"codex_version"`
+		Supported    bool   `json:"supported"`
+		Error        string `json:"error"`
 	}
-	compatibility, err := codex.LookupCompatibility(version)
-	if err != nil {
-		skipOrFail(t, err.Error())
+	output := run(t, binary, path, t.TempDir(), nil, true, "doctor", "--json")
+	if err := json.Unmarshal(output, &report); err != nil {
+		t.Fatalf("decode doctor output: %v", err)
 	}
-	return path, compatibility
+	if !report.Supported {
+		skipOrFail(t, "Codex "+report.CodexVersion+" is unsupported "+report.Error)
+	}
+	return path, report.CodexVersion
 }
 
 func skipOrFail(t *testing.T, reason string) {
@@ -245,26 +274,26 @@ func run(
 func cleanEnvironment(home, codexPath string) []string {
 	environment := make([]string, 0, len(os.Environ())+2)
 	for _, value := range os.Environ() {
-		if !strings.HasPrefix(value, "CODEX_HOME=") && !strings.HasPrefix(value, "CXPORT_CODEX=") {
+		if !strings.HasPrefix(value, "CODEX_HOME=") && !strings.HasPrefix(value, codex.BinaryEnvironment+"=") {
 			environment = append(environment, value)
 		}
 	}
-	return append(environment, "CODEX_HOME="+home, "CXPORT_CODEX="+codexPath)
+	return append(environment, "CODEX_HOME="+home, codex.BinaryEnvironment+"="+codexPath)
 }
 
 func assertListedCWD(t *testing.T, output []byte, sessionID, want string) {
 	t.Helper()
 	var threads []struct {
-		ID  string `json:"id"`
-		CWD string `json:"cwd"`
+		ID        string `json:"id"`
+		Workspace string `json:"workspace"`
 	}
 	if err := json.Unmarshal(output, &threads); err != nil {
 		t.Fatalf("decode list output: %v", err)
 	}
 	for _, thread := range threads {
 		if thread.ID == sessionID {
-			if thread.CWD != want {
-				t.Fatalf("listed cwd = %q, want %q", thread.CWD, want)
+			if thread.Workspace != want {
+				t.Fatalf("listed workspace = %q, want %q", thread.Workspace, want)
 			}
 			return
 		}

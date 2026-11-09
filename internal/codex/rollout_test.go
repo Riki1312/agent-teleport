@@ -13,11 +13,13 @@ import (
 
 const testSessionID = "01999999-1111-7777-8888-222222222222"
 
-var testCompatibility = compatibilities["0.154.0"]
+const testVersion = "0.154.0"
+
+var testLayout = layouts[testVersion]
 
 func TestValidateAndRemapWorkspace(t *testing.T) {
 	source := fixtureRollout("/source/workspace")
-	meta, err := testCompatibility.ValidateRollout(source)
+	meta, err := testLayout.validateRollout(source)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -25,7 +27,7 @@ func TestValidateAndRemapWorkspace(t *testing.T) {
 		t.Fatalf("unexpected metadata: %#v", meta)
 	}
 
-	remapped, remappedMeta, err := testCompatibility.RemapWorkspace(source, "/target/workspace")
+	remapped, remappedMeta, err := testLayout.remapWorkspace(source, "/target/workspace")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -38,27 +40,27 @@ func TestValidateAndRemapWorkspace(t *testing.T) {
 	if !bytes.Contains(remapped, []byte(`"cwd":"file:///source/workspace"`)) {
 		t.Fatal("recorded tool result path was unexpectedly rewritten")
 	}
-	if _, err := testCompatibility.ValidateRollout(remapped); err != nil {
+	if _, err := testLayout.validateRollout(remapped); err != nil {
 		t.Fatalf("remapped rollout is invalid: %v", err)
 	}
 }
 
 func TestRemapWorkspaceRoundTripsNativeFixture(t *testing.T) {
-	original, err := os.ReadFile(filepath.Join("..", "..", "testdata", "codex", testCompatibility.Version, "rollout.jsonl"))
+	original, err := os.ReadFile(filepath.Join("..", "..", "testdata", "codex", testVersion, "rollout.jsonl"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	source, err := testCompatibility.ValidateRollout(original)
+	source, err := testLayout.validateRollout(original)
 	if err != nil {
 		t.Fatal(err)
 	}
 
 	// when
-	remapped, _, err := testCompatibility.RemapWorkspace(original, "/target/workspace")
+	remapped, _, err := testLayout.remapWorkspace(original, "/target/workspace")
 	if err != nil {
 		t.Fatal(err)
 	}
-	restored, _, err := testCompatibility.RemapWorkspace(remapped, source.CWD)
+	restored, _, err := testLayout.remapWorkspace(remapped, source.CWD)
 
 	// then
 	if err != nil {
@@ -76,7 +78,7 @@ func TestRemapWorkspaceRoundTripsNativeFixture(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if _, ok := testCompatibility.workspaceEvents[kind]; ok {
+		if _, ok := testLayout.workspaceEvents[kind]; ok {
 			if bytes.Contains(line, []byte(source.CWD)) {
 				t.Fatalf("workspace metadata on line %d keeps the source workspace", index+1)
 			}
@@ -92,7 +94,7 @@ func TestRemapWorkspacePreservesUnrelatedBytes(t *testing.T) {
 	source = bytes.Replace(source, []byte(`{"payload":{"cwd":"/source/workspace"},"type":"turn_context"}`), []byte(line), 1)
 
 	// when
-	remapped, _, err := testCompatibility.RemapWorkspace(source, "/target/workspace")
+	remapped, _, err := testLayout.remapWorkspace(source, "/target/workspace")
 
 	// then
 	if err != nil {
@@ -113,7 +115,7 @@ func TestRemapWorkspaceRejectsUnsupportedPathForms(t *testing.T) {
 	)
 
 	// when
-	_, _, err := testCompatibility.RemapWorkspace(source, "/target/workspace")
+	_, _, err := testLayout.remapWorkspace(source, "/target/workspace")
 
 	// then
 	if err == nil || !strings.Contains(err.Error(), "unsupported form") {
@@ -125,7 +127,7 @@ func TestValidateRolloutRejectsIncompleteTurn(t *testing.T) {
 	source := fixtureRollout("/source/workspace")
 	lastLine := bytes.LastIndex(source[:len(source)-1], []byte{'\n'})
 	incomplete := append([]byte(nil), source[:lastLine+1]...)
-	if _, err := testCompatibility.ValidateRollout(incomplete); err == nil || !strings.Contains(err.Error(), "completed turn") {
+	if _, err := testLayout.validateRollout(incomplete); err == nil || !strings.Contains(err.Error(), "completed turn") {
 		t.Fatalf("ValidateRollout error = %v", err)
 	}
 }
@@ -137,7 +139,7 @@ func TestValidateRolloutRejectsUnsafeSessionID(t *testing.T) {
 		[]byte("../../../../tmp/not-a-session-id"),
 		1,
 	)
-	if _, err := testCompatibility.ValidateRollout(source); err == nil || !strings.Contains(err.Error(), "UUIDv7") {
+	if _, err := testLayout.validateRollout(source); err == nil || !strings.Contains(err.Error(), "UUIDv7") {
 		t.Fatalf("ValidateRollout error = %v", err)
 	}
 }
@@ -167,7 +169,7 @@ func TestValidateRolloutHistoryBase(t *testing.T) {
 				t.Fatal(err)
 			}
 			source := append(append(header, '\n'), rest...)
-			_, err = testCompatibility.ValidateRollout(source)
+			_, err = testLayout.validateRollout(source)
 			if test.wantError {
 				if err == nil || !strings.Contains(err.Error(), "history_base") {
 					t.Fatalf("ValidateRollout must reject an incomplete single-file archive, got %v", err)
@@ -211,7 +213,7 @@ func TestValidateRolloutThreadAndSessionIDs(t *testing.T) {
 				t.Fatal(err)
 			}
 			source := append(append(header, '\n'), rest...)
-			meta, err := testCompatibility.ValidateRollout(source)
+			meta, err := testLayout.validateRollout(source)
 			if test.wantError {
 				if err == nil || !strings.Contains(err.Error(), "different thread and session IDs") {
 					t.Fatalf("ambiguous thread identity must fail closed, got %v", err)
@@ -224,12 +226,12 @@ func TestValidateRolloutThreadAndSessionIDs(t *testing.T) {
 }
 
 func TestRolloutPath(t *testing.T) {
-	meta := SessionMeta{
+	meta := sessionMeta{
 		ID:        testSessionID,
 		Timestamp: time.Date(2026, 9, 13, 9, 58, 44, 0, time.UTC),
 	}
 	want := filepath.Join("/codex", "sessions", "2026", "09", "13", "rollout-2026-09-13T09-58-44-"+testSessionID+".jsonl")
-	if got := testCompatibility.RolloutPath("/codex", meta); got != want {
+	if got := rolloutPath("/codex", meta); got != want {
 		t.Fatalf("RolloutPath() = %q, want %q", got, want)
 	}
 }
@@ -250,7 +252,7 @@ func TestExistingRolloutsIncludesArchivedSessions(t *testing.T) {
 	}
 
 	// when
-	paths, err := ExistingRollouts(home, testSessionID)
+	paths, err := existingRollouts(home, testSessionID)
 
 	// then
 	if err != nil {
@@ -260,17 +262,17 @@ func TestExistingRolloutsIncludesArchivedSessions(t *testing.T) {
 	want := []string{archived, active}
 	slices.Sort(want)
 	if !slices.Equal(paths, want) {
-		t.Fatalf("ExistingRollouts() = %q, want %q", paths, want)
+		t.Fatalf("existingRollouts() = %q, want %q", paths, want)
 	}
 }
 
 func TestExistingRolloutsWithoutSessionStores(t *testing.T) {
 	// when
-	paths, err := ExistingRollouts(t.TempDir(), testSessionID)
+	paths, err := existingRollouts(t.TempDir(), testSessionID)
 
 	// then
 	if err != nil || len(paths) != 0 {
-		t.Fatalf("ExistingRollouts() = %q, %v", paths, err)
+		t.Fatalf("existingRollouts() = %q, %v", paths, err)
 	}
 }
 
