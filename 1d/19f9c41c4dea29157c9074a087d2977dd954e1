@@ -1,0 +1,70 @@
+internal/codex/layout_test.go
+  s_b3feabb7857cd3::t_68ef6faa20f3d5 44-63
+internal/pathmap/pathmap_test.go
+  s_b3feabb7857cd3::t_8ffcddd1b1af7e 158-160,167-172,179
+  s_b3feabb7857cd3::t_ac34286e0f3523 5,51,58-59,63,66-68,70-73,77,94,97-98,102,105-106,108-125,149
+  s_b3feabb7857cd3::t_06e26a057e960f 48,57
+  s_b3feabb7857cd3::t_b8fa49120c9768 152-155
+  s_b3feabb7857cd3::t_9dcf01f4a45ae1 81,161-166,173-178
+  s_b3feabb7857cd3::t_917ac29e2d8539 144-148,150-151
+internal/claude/claude.go
+  s_b3feabb7857cd3::t_b1dee1c8e24b76 298
+  s_b3feabb7857cd3::t_76236b236bdbea 296
+context/decisions.md
+  s_b3feabb7857cd3::t_1997ddd9e24da4 143-148
+internal/codex/import.go
+  s_b3feabb7857cd3::t_31e4aa49a3d62a 377
+  s_b3feabb7857cd3::t_4d98a49aa818a2 9,493-494,496-497
+internal/codex/layout.go
+  s_b3feabb7857cd3::t_8d7f628f36dfa4 63-64,67-68,73-151,153-157,159
+ARCHITECTURE.md
+  s_b3feabb7857cd3::t_1997ddd9e24da4 104-105,150
+internal/codex/session.go
+  s_b3feabb7857cd3::t_aa6557f7610e44 45-46,51-65,125,139,203-205,520-521,571
+  s_b3feabb7857cd3::t_76236b236bdbea 564-567
+internal/codex/rollout.go
+  s_b3feabb7857cd3::t_aa6557f7610e44 75-79,82,87-88,90-95,99-102,104,107-127,140,170-173
+internal/codex/rollout_test.go
+  s_b3feabb7857cd3::t_ac5ebb45e2fa0b 167,244,368-371,374,377-382,384
+internal/archive/archive_test.go
+  s_b3feabb7857cd3::t_8f9fabdb032261 9,17,21-22,25,191-208
+context/current.md
+  s_b3feabb7857cd3::t_1997ddd9e24da4 74
+internal/cli/cli.go
+  s_b3feabb7857cd3::t_716ab83405b0ea 200
+  s_b3feabb7857cd3::t_2f0f6f764f592b 599-604,612
+internal/claude/transcript.go
+  s_b3feabb7857cd3::t_76236b236bdbea 17-25
+  s_b3feabb7857cd3::t_ae9ea801119445 26-37,154
+internal/codex/replace.go
+  s_b3feabb7857cd3::t_aa6557f7610e44 78,200-201
+internal/claude/transcript_test.go
+  s_b3feabb7857cd3::t_ac34286e0f3523 127,138,150,154
+internal/archive/archive.go
+  s_b3feabb7857cd3::t_39f6aed215f1f4 10,170-176
+  s_b3feabb7857cd3::t_f59dc5773c8b2e 17,38-39,154-157,159-169,177-179,181-184,187,190-195,206,209,213,216,218,225,229-238,250-255,263,282-285,299-304,323,327-329,334,337,341-342,344-345
+  s_b3feabb7857cd3::t_adfd6243c3391e 273-274,278-281,297-298,305-307,321-322,324-326,330,338-340,343
+internal/pathmap/pathmap.go
+  s_b3feabb7857cd3::t_b72ddc41bc425f 78-81,84,86-87,91,93,115-121,123,138,140
+  s_b3feabb7857cd3::t_b1dee1c8e24b76 30-32,56-62
+  s_b3feabb7857cd3::t_8ffcddd1b1af7e 82-83,96-101,103-111
+  s_b3feabb7857cd3::t_88587ea8d9ea9c 131-137,139,141,144-145,149,151,154-157,159-160,162-166,169,171-178,180-183,187-188,190,209-219
+  s_b3feabb7857cd3::t_c857405b57dde1 33-37,63-70,85,88-90,128
+  s_b3feabb7857cd3::t_76236b236bdbea 191-208
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.2",
+  "base_commit_sha": "1d19f9c41c4dea29157c9074a087d2977dd954e1",
+  "prompts": {},
+  "sessions": {
+    "s_b3feabb7857cd3": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "fd1b6ebe-1b52-4a20-8b44-740169df5be6",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Riccardo <riki.brero@gmail.com>"
+    }
+  }
+}
