@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 
 	"github.com/Riki1312/agent-teleport/internal/archive"
@@ -373,7 +374,7 @@ func (s *Store) pointAtLocalObjects(file rolloutFile, objects map[string]localOb
 	if err != nil {
 		return rolloutFile{}, fmt.Errorf("%s: %w", file.name, err)
 	}
-	return newRolloutFile(file.name, data)
+	return file.rewritten(data)
 }
 
 // executePlan performs a session plan in archive order, so every referenced
@@ -489,35 +490,13 @@ func (s *Store) replayRevert(session codexSession, snapshot rolloutFile, objects
 // requireRevertHeader checks that Codex's replayed snapshot consists of
 // exactly a revert header with the same records as the archived snapshot's.
 func (s *Store) requireRevertHeader(native, archived rolloutFile) error {
-	nativeKinds, err := recordKinds(native.data)
-	if err != nil {
-		return err
+	if len(native.kinds) != s.layout.revertHeaderRecords || len(archived.kinds) < len(native.kinds) {
+		return fmt.Errorf("Codex wrote a revert header of %d records, want %d", len(native.kinds), s.layout.revertHeaderRecords)
 	}
-	archivedKinds, err := recordKinds(archived.data)
-	if err != nil {
-		return err
-	}
-	if len(nativeKinds) != s.layout.revertHeaderRecords || len(archivedKinds) < len(nativeKinds) {
-		return fmt.Errorf("Codex wrote a revert header of %d records, want %d", len(nativeKinds), s.layout.revertHeaderRecords)
-	}
-	for index, kind := range nativeKinds {
-		if archivedKinds[index] != kind {
-			return errors.New("Codex wrote a different revert header than the archived snapshot")
-		}
+	if !slices.Equal(native.kinds, archived.kinds[:len(native.kinds)]) {
+		return errors.New("Codex wrote a different revert header than the archived snapshot")
 	}
 	return nil
-}
-
-func recordKinds(data []byte) ([]eventKind, error) {
-	var kinds []eventKind
-	for line := range bytes.Lines(data) {
-		kind, err := classifyEvent(line)
-		if err != nil {
-			return nil, err
-		}
-		kinds = append(kinds, kind)
-	}
-	return kinds, nil
 }
 
 func newPaths(before, after []string) []string {

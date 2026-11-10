@@ -2,6 +2,7 @@ package pathmap
 
 import (
 	"errors"
+	"strings"
 	"testing"
 )
 
@@ -44,43 +45,40 @@ func TestPathPrefersTheLongestNestedSource(t *testing.T) {
 func TestRewriteKeepsEveryOtherByte(t *testing.T) {
 	mapping := mustNew(t, Move{From: "/work/project", To: "/target"})
 	// The unchanged string keeps an escape that Go would not write.
-	record := []byte(`{"cwd" : "/work/project", "n":1.50, "nested":"{\"dir\":\"/work/project/a\"}", "text":"\u00e9 /work/projects"}`)
+	record := []byte(`{"cwd" : "/work/project", "n":1.50, "nested":"{\"dir\":\"/work/project/a\"}", "text":"` + unicodeEscape("00e9") + ` /work/projects"}`)
 
 	// when
-	rewritten, changed, err := mapping.Rewrite(record)
+	rewritten, err := mapping.Rewrite(record)
 
 	// then
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := `{"cwd" : "/target", "n":1.50, "nested":"{\"dir\":\"/target/a\"}", "text":"\u00e9 /work/projects"}`
-	if string(rewritten) != want || changed != 2 {
-		t.Fatalf("Rewrite() = %s (%d changed), want %s", rewritten, changed, want)
-	}
-}
-
-func TestRewriteLimitedToMembersLeavesOtherValues(t *testing.T) {
-	mapping := mustNew(t, Move{From: "/work/project", To: "/target"})
-	record := []byte(`{"message":{"content":"read /work/project/a"},"cwd":"/work/project","sessionId":"s"}`)
-
-	// when
-	rewritten, changed, err := mapping.Rewrite(record, "cwd")
-
-	// then
-	if err != nil {
-		t.Fatal(err)
-	}
-	want := `{"message":{"content":"read /work/project/a"},"cwd":"/target","sessionId":"s"}`
-	if string(rewritten) != want || changed != 1 {
-		t.Fatalf("Rewrite() = %s (%d changed), want %s", rewritten, changed, want)
+	want := `{"cwd" : "/target", "n":1.50, "nested":"{\"dir\":\"/target/a\"}", "text":"` + unicodeEscape("00e9") + ` /work/projects"}`
+	if string(rewritten) != want {
+		t.Fatalf("Rewrite() = %s, want %s", rewritten, want)
 	}
 }
 
 func TestRewriteRejectsRecordsThatAlreadyMentionTheTarget(t *testing.T) {
 	mapping := mustNew(t, Move{From: "/work/project", To: "/target"})
 
+	for _, record := range []string{`{"cwd":"/work/project","note":"/target"}`, `{"note":"/target/x"}`} {
+		// when
+		_, err := mapping.Rewrite([]byte(record))
+
+		// then
+		if !errors.Is(err, ErrIrreversible) {
+			t.Fatalf("Rewrite(%s) error = %v, want ErrIrreversible", record, err)
+		}
+	}
+}
+
+func TestRewriteRejectsStringsThatWouldNotEncodeBack(t *testing.T) {
+	mapping := mustNew(t, Move{From: "/work/project", To: "/target"})
+
 	// when
-	_, _, err := mapping.Rewrite([]byte(`{"cwd":"/work/project","note":"/target"}`))
+	_, err := mapping.Rewrite([]byte(`{"cwd":"` + unicodeEscape("002f") + `work/project"}`))
 
 	// then
 	if !errors.Is(err, ErrIrreversible) {
@@ -93,25 +91,38 @@ func TestRewriteWithoutMentionsReturnsTheRecord(t *testing.T) {
 	record := []byte(`{"cwd":"/elsewhere"}`)
 
 	// when
-	rewritten, changed, err := mapping.Rewrite(record, "cwd")
+	rewritten, err := mapping.Rewrite(record)
 
 	// then
-	if err != nil || changed != 0 || string(rewritten) != string(record) {
-		t.Fatalf("Rewrite() = %s, %d, %v", rewritten, changed, err)
+	if err != nil || string(rewritten) != string(record) {
+		t.Fatalf("Rewrite() = %s, %v", rewritten, err)
 	}
 }
 
-func TestRewriteOfMembersRequiresAnObject(t *testing.T) {
+func TestRewriteRejectsAnUnterminatedString(t *testing.T) {
 	mapping := mustNew(t, Move{From: "/work/project", To: "/target"})
 
-	for _, record := range []string{`["/work/project"]`, `{"cwd":"/work/project"} {}`, `{"cwd":`} {
-		// when
-		_, _, err := mapping.Rewrite([]byte(record), "cwd")
+	// when
+	_, err := mapping.Rewrite([]byte(`{"cwd":"/work/project`))
 
-		// then
-		if err == nil {
-			t.Fatalf("Rewrite(%s) succeeded", record)
-		}
+	// then
+	if err == nil {
+		t.Fatal("Rewrite() accepted an unterminated string")
+	}
+}
+
+func TestRewriteLinesKeepsLineEndingsAndNamesTheFailingLine(t *testing.T) {
+	mapping := mustNew(t, Move{From: "/work/project", To: "/target"})
+
+	// when
+	rewritten, err := mapping.RewriteLines([]byte("{\"a\":\"/work/project\"}\n\n{\"b\":1}"))
+
+	// then
+	if err != nil || string(rewritten) != "{\"a\":\"/target\"}\n\n{\"b\":1}" {
+		t.Fatalf("RewriteLines() = %q, %v", rewritten, err)
+	}
+	if _, err := mapping.RewriteLines([]byte("{}\n{\"a\":\"/target\"}\n")); err == nil || !strings.Contains(err.Error(), "line 2") {
+		t.Fatalf("RewriteLines() error = %v", err)
 	}
 }
 
@@ -129,4 +140,40 @@ func TestNewRejectsRelativeAndRootPaths(t *testing.T) {
 			t.Fatalf("New(%+v) succeeded", move)
 		}
 	}
+}
+
+func TestRewriteDecodesRecordsWithEscapedSlashes(t *testing.T) {
+	mapping := mustNew(t, Move{From: "/work/project", To: "/target"})
+
+	// when
+	_, err := mapping.Rewrite([]byte(`{"cwd":"\/work\/project\/a"}`))
+
+	// then
+	// The mention is found despite the escapes; re-encoding would drop them,
+	// so the rewrite fails closed instead of skipping the record.
+	if !errors.Is(err, ErrIrreversible) {
+		t.Fatalf("Rewrite() error = %v, want ErrIrreversible", err)
+	}
+}
+
+func TestEscapesPrintableASCII(t *testing.T) {
+	for record, want := range map[string]bool{
+		`{"a":"` + unicodeEscape("001b") + `[31m"}`: false,
+		`{"a":"` + unicodeEscape("00e9") + `"}`:     false,
+		`{"a":"` + unicodeEscape("0041") + `"}`:     true,
+		`{"a":"` + unicodeEscape("002F") + `"}`:     true,
+		`{"a":"x` + string(rune(92)) + `/y"}`:       true,
+		`{"a":"` + unicodeEscape("00") + `"}`:       false,
+	} {
+		// when, then
+		if got := escapesPrintableASCII([]byte(record)); got != want {
+			t.Fatalf("escapesPrintableASCII(%s) = %t", record, got)
+		}
+	}
+}
+
+// unicodeEscape returns the JSON escape of a UTF-16 code unit in hex. Tests
+// assemble escapes so that no tool along the way decodes them.
+func unicodeEscape(hex string) string {
+	return string(rune(92)) + "u" + hex
 }

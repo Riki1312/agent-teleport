@@ -10,22 +10,31 @@ import (
 	"strings"
 	"time"
 	"unicode/utf16"
-
-	"github.com/Riki1312/agent-teleport/internal/pathmap"
 )
 
 // record holds the fields of a transcript record that the adapter reads.
 type record struct {
-	Type        string          `json:"type"`
-	SessionID   string          `json:"sessionId"`
-	AgentID     string          `json:"agentId"`
-	CWD         string          `json:"cwd"`
-	Timestamp   string          `json:"timestamp"`
-	IsMeta      bool            `json:"isMeta"`
-	IsSidechain bool            `json:"isSidechain"`
-	AITitle     string          `json:"aiTitle"`
-	CustomTitle string          `json:"customTitle"`
-	Message     json.RawMessage `json:"message"`
+	Type        string       `json:"type"`
+	SessionID   string       `json:"sessionId"`
+	AgentID     string       `json:"agentId"`
+	CWD         string       `json:"cwd"`
+	Timestamp   string       `json:"timestamp"`
+	IsMeta      bool         `json:"isMeta"`
+	IsSidechain bool         `json:"isSidechain"`
+	AITitle     string       `json:"aiTitle"`
+	CustomTitle string       `json:"customTitle"`
+	Message     borrowedJSON `json:"message"`
+}
+
+// borrowedJSON keeps a JSON value as a slice of the decoded record instead of
+// a copy, because transcripts can hold hundreds of megabytes of messages. It
+// is valid while the record's bytes are.
+type borrowedJSON []byte
+
+// UnmarshalJSON keeps data without copying it.
+func (b *borrowedJSON) UnmarshalJSON(data []byte) error {
+	*b = data
+	return nil
 }
 
 // transcriptInfo summarizes a transcript.
@@ -142,7 +151,7 @@ func completeRecords(data []byte) []byte {
 
 // promptText returns the text a person typed in a user message, or "" for
 // messages that carry only tool results.
-func promptText(message json.RawMessage) string {
+func promptText(message []byte) string {
 	var decoded struct {
 		Content json.RawMessage `json:"content"`
 	}
@@ -166,23 +175,6 @@ func promptText(message json.RawMessage) string {
 		}
 	}
 	return ""
-}
-
-// relocateRecords moves every path that mapping covers in every record of a
-// transcript.
-func relocateRecords(data []byte, mapping pathmap.Mapping) ([]byte, error) {
-	lines := bytes.Split(data, []byte{'\n'})
-	for index, line := range lines {
-		if len(line) == 0 {
-			continue
-		}
-		rewritten, _, err := mapping.Rewrite(line)
-		if err != nil {
-			return nil, fmt.Errorf("line %d: %w", index+1, err)
-		}
-		lines[index] = rewritten
-	}
-	return bytes.Join(lines, []byte{'\n'}), nil
 }
 
 // maxProjectFolderName is the longest project folder name Claude Code uses

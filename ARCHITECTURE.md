@@ -101,7 +101,8 @@ A packed archive is a gzip-compressed tar file with the `.teleport` extension. I
 - Payload paths are clean, relative, and slash-separated; the provider chooses them.
 - Decoding rejects unknown manifest fields, unsupported format versions, unlisted or missing entries, links and other non-regular files, size limit violations, and digest mismatches.
 - Digests detect accidental corruption. They are not signatures and do not establish who created an archive.
-- Archives are immutable. Export verifies the encoded archive before writing it, and creates the output file exclusively.
+- Archives are immutable. Export streams the archive, compressed for speed, to its output while a verifier decodes the same stream without keeping payloads, and creates an output file exclusively.
+- A payload may hold up to 4 GiB and an archive up to 8 GiB. Sessions are processed in memory, about twice their size when exported and three times when imported; a 450 MB Codex session exports in about 15 seconds.
 
 The format is unreleased, so it changes in place without migrations until the first stable release.
 
@@ -146,7 +147,7 @@ An archived Codex session therefore holds every object of the root thread and of
 2. Collect the session from its rollout files, without App Server, which cannot write its state inside Codex's sandbox: the root thread's objects, every thread whose session ID names the root, and the objects their references lead to. Each thread's current object is determined from its local files, and ancestors outside the session contribute only the referenced prefix.
 3. Read the complete records of every file; Codex only appends, so they are a consistent snapshot while a process writes. Cut each thread's current object before the `task_started` record of a turn in progress, such as the turn running agent-teleport, so every remaining turn has completed or been aborted.
 4. Validate identities, references at record boundaries, and turn boundaries across each thread's logical history.
-5. Build the archive in memory, verify it, and write it.
+5. Build the archive in memory, then stream and verify it as it is written.
 
 `export` accepts the full ID of a thread that Codex does not list, such as a fork without turns of its own. Exporting a sub-agent thread fails with the session to export instead.
 

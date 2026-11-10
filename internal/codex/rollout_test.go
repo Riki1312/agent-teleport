@@ -164,7 +164,7 @@ func TestParseRolloutRejectsUnsafeSessionID(t *testing.T) {
 	)
 
 	// when
-	_, err := parseRollout(source)
+	_, _, err := parseRollout(source)
 
 	// then
 	if err == nil || !strings.Contains(err.Error(), "UUIDv7") {
@@ -241,7 +241,7 @@ func TestParseRolloutThreadAndSessionIDs(t *testing.T) {
 			}
 
 			// when
-			meta, err := parseRollout(append(append(header, '\n'), rest...))
+			meta, _, err := parseRollout(append(append(header, '\n'), rest...))
 
 			// then
 			if err != nil || meta.ID != testSessionID || meta.SessionID != test.wantSessionID {
@@ -365,15 +365,23 @@ func relocateRollout(data []byte, target string) ([]byte, sessionMeta, error) {
 func TestWithoutOpenTurnLeavesOutTheTurnInProgress(t *testing.T) {
 	completed := fixtureRollout("/source/workspace")
 	running := append(append([]byte{}, completed...), []byte(`{"type":"event_msg","payload":{"type":"task_started"}}`+"\n"+`{"type":"response_item","payload":{"type":"function_call"}}`+"\n")...)
+	file, err := newRolloutFile(testRolloutName, running)
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	// when
-	prefix, err := testLayout.withoutOpenTurn(running)
+	prefix := testLayout.withoutOpenTurn(file)
 
 	// then
-	if err != nil || !bytes.Equal(prefix, completed) {
-		t.Fatalf("withoutOpenTurn() = %q, %v", prefix, err)
+	if !bytes.Equal(prefix.data, completed) || bytes.Count(prefix.data, []byte{'\n'}) != len(prefix.kinds) {
+		t.Fatalf("withoutOpenTurn() = %q with %d kinds", prefix.data, len(prefix.kinds))
 	}
-	if whole, _ := testLayout.withoutOpenTurn(completed); !bytes.Equal(whole, completed) {
+	whole, err := newRolloutFile(testRolloutName, completed)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if unchanged := testLayout.withoutOpenTurn(whole); !bytes.Equal(unchanged.data, completed) {
 		t.Fatal("withoutOpenTurn() changed a rollout without an open turn")
 	}
 }

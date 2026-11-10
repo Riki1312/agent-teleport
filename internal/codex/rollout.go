@@ -11,7 +11,6 @@ import (
 	"time"
 
 	"github.com/Riki1312/agent-teleport/internal/fsutil"
-	"github.com/Riki1312/agent-teleport/internal/pathmap"
 )
 
 // sessionMeta is the identity recorded in a rollout's first event.
@@ -73,39 +72,59 @@ func firstPrompt(data []byte) string {
 	return ""
 }
 
-// withoutOpenTurn returns the prefix of a rollout before its turn in
-// progress, or the whole rollout when every started turn has ended.
-func (l layout) withoutOpenTurn(data []byte) ([]byte, error) {
-	open := false
-	start, offset := 0, 0
-	for line := range bytes.Lines(data) {
-		kind, err := classifyEvent(line)
-		if err != nil {
-			return nil, err
-		}
+// withoutOpenTurn returns the rollout as it was before its turn in progress,
+// or unchanged when every started turn has ended.
+func (l layout) withoutOpenTurn(file rolloutFile) rolloutFile {
+	open, start := false, 0
+	for index, kind := range file.kinds {
 		switch {
 		case kind == l.turnStarted && !open:
-			open, start = true, offset
+			open, start = true, index
 		case l.isTurnEnd(kind):
 			open = false
 		}
-		offset += len(line)
 	}
-	if open {
-		return data[:start], nil
+	if !open {
+		return file
 	}
-	return data, nil
+	offset := 0
+	for range start {
+		offset += bytes.IndexByte(file.data[offset:], '\n') + 1
+	}
+	file.data, file.kinds = file.data[:offset], file.kinds[:start]
+	return file
 }
 
 // parseRollout checks that data is a sequence of complete JSON records starting
-// with session metadata, and returns the recorded identity. It does not check
-// turn boundaries, which depend on the whole history.
-func parseRollout(data []byte) (sessionMeta, error) {
+// with session metadata, and returns the metadata and the kind of every
+// record. Classifying a record also validates it, so each rollout is decoded
+// once, however large.
+func parseRollout(data []byte) (sessionMeta, []eventKind, error) {
 	if len(data) == 0 || data[len(data)-1] != '\n' {
-		return sessionMeta{}, errors.New("rollout does not end with a complete JSONL record")
+		return sessionMeta{}, nil, errors.New("rollout does not end with a complete JSONL record")
 	}
 	lines := bytes.Split(data[:len(data)-1], []byte{'\n'})
-	if len(lines[0]) == 0 {
+	meta, err := parseMeta(lines[0])
+	if err != nil {
+		return sessionMeta{}, nil, err
+	}
+	kinds := make([]eventKind, len(lines))
+	kinds[0] = eventKind{eventType: "session_meta"}
+	for index, line := range lines[1:] {
+		if len(line) == 0 {
+			return sessionMeta{}, nil, fmt.Errorf("rollout line %d is empty", index+2)
+		}
+		if kinds[index+1], err = classifyEvent(line); err != nil {
+			return sessionMeta{}, nil, fmt.Errorf("rollout line %d: %w", index+2, err)
+		}
+	}
+	return meta, kinds, nil
+}
+
+// parseMeta decodes and checks the session metadata of a rollout's first
+// record.
+func parseMeta(line []byte) (sessionMeta, error) {
+	if len(line) == 0 {
 		return sessionMeta{}, errors.New("rollout has no session metadata")
 	}
 	var first struct {
@@ -118,7 +137,7 @@ func parseRollout(data []byte) (sessionMeta, error) {
 			HistoryBase *historyBase `json:"history_base"`
 		} `json:"payload"`
 	}
-	if err := json.Unmarshal(lines[0], &first); err != nil {
+	if err := json.Unmarshal(line, &first); err != nil {
 		return sessionMeta{}, fmt.Errorf("decode session metadata: %w", err)
 	}
 	if first.Type != "session_meta" {
@@ -145,26 +164,13 @@ func parseRollout(data []byte) (sessionMeta, error) {
 	if err != nil {
 		return sessionMeta{}, fmt.Errorf("parse session timestamp: %w", err)
 	}
-	for index, line := range lines[1:] {
-		if len(line) == 0 {
-			return sessionMeta{}, fmt.Errorf("rollout line %d is empty", index+2)
-		}
-		if !json.Valid(line) {
-			return sessionMeta{}, fmt.Errorf("rollout line %d is not valid JSON", index+2)
-		}
-	}
 	return sessionMeta{ID: id, SessionID: sessionID, CWD: first.Payload.CWD, Timestamp: timestamp, Base: first.Payload.HistoryBase}, nil
 }
 
-// advanceTurns applies the turn boundaries in the records after a rollout's
-// session metadata to state.
-func (l layout) advanceTurns(state *turnState, data []byte) error {
-	lines := bytes.Split(bytes.TrimSuffix(data, []byte{'\n'}), []byte{'\n'})
-	for index, line := range lines[1:] {
-		kind, err := classifyEvent(line)
-		if err != nil {
-			return fmt.Errorf("decode rollout line %d: %w", index+2, err)
-		}
+// advanceTurns applies the turn boundaries of records, the kinds of a
+// rollout's records after its session metadata, to state.
+func (l layout) advanceTurns(state *turnState, records []eventKind) {
+	for _, kind := range records {
 		switch {
 		case kind == l.turnStarted:
 			state.open = true
@@ -174,7 +180,6 @@ func (l layout) advanceTurns(state *turnState, data []byte) error {
 			state.completed++
 		}
 	}
-	return nil
 }
 
 // validSessionID accepts only UUIDv7 strings, which also keeps a session ID safe
@@ -199,31 +204,6 @@ func validSessionID(id string) bool {
 		}
 	}
 	return true
-}
-
-// relocateLines moves every path that mapping covers in every record of
-// data, keeping the relative suffix of paths inside a moved directory, and
-// returns the number of strings changed. Only rewritten JSON strings change,
-// and the rewrite must be reversible, so a rollout that already mentions a
-// target directory fails.
-func relocateLines(data []byte, mapping pathmap.Mapping) ([]byte, int, error) {
-	lines := bytes.Split(data, []byte{'\n'})
-	relocated := 0
-	for index, line := range lines {
-		if len(line) == 0 {
-			continue
-		}
-		rewritten, changed, err := mapping.Rewrite(line)
-		if errors.Is(err, pathmap.ErrIrreversible) {
-			return nil, 0, fmt.Errorf("rollout line %d already mentions the target directory; the workspace move would not be reversible", index+1)
-		}
-		if err != nil {
-			return nil, 0, fmt.Errorf("move paths on rollout line %d: %w", index+1, err)
-		}
-		lines[index] = rewritten
-		relocated += changed
-	}
-	return bytes.Join(lines, []byte{'\n'}), relocated, nil
 }
 
 // storedSession lists the files Codex and agent-teleport keep for one session.

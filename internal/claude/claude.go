@@ -293,9 +293,9 @@ func relocateFile(file sessionFile, mapping pathmap.Mapping) ([]byte, error) {
 	var err error
 	switch file.kind {
 	case transcriptKind, agentTranscriptKind:
-		moved, err = relocateRecords(file.data, mapping)
+		moved, err = mapping.RewriteLines(file.data)
 	case agentMetadataKind, titleKind:
-		moved, _, err = mapping.Rewrite(file.data)
+		moved, err = mapping.Rewrite(file.data)
 	default:
 		moved, err = mapping.RewriteText(file.data)
 	}

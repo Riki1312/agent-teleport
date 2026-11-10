@@ -140,6 +140,12 @@ Each entry uses this shape:
 - `rationale`: Pull-request gates must be deterministic and credential-free; the native CLI is the black-box oracle for storage changes.
 - `impact`: Every supported version passes the two-home test of its provider.
 
+### Process sessions in memory, once
+
+- `decision`: Keep sessions in memory, but decode each file once: classify every rollout record in one pass and reuse the kinds, skip path rewrites for records and strings that cannot mention a moved directory, read archive entries into buffers of their exact size, and stream archives to their output with fast compression while a concurrent verifier checks the stream. Archives allow 4 GiB per payload and 8 GiB in total.
+- `rationale`: Real Codex sessions reach hundreds of megabytes; a 453 MB one took 29 seconds and 1.4 GB to export before, and 14 seconds and 1 GB after, without the rewrite that streaming through files would need.
+- `impact`: Memory stays about two to three times the session size. A path rewrite falls back to full decoding for directories outside plain ASCII and for records that escape printable ASCII, so it never skips a mention.
+
 ### Pin dependencies and tools
 
 - `decision`: Prefer the standard library. Pin the latest stable version of every dependency and tool, and update them automatically. There is no full-screen session picker; selection stays in the standard library.

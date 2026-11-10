@@ -6,6 +6,7 @@ import (
 	"compress/gzip"
 	"crypto/rand"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -13,15 +14,15 @@ import (
 	"time"
 )
 
-func TestEncodeDecodeRoundTrip(t *testing.T) {
+func TestWriteDecodeRoundTrip(t *testing.T) {
 	original := testArchive(t, Payload{Path: "rollout.jsonl", Data: randomBytes(t)}, Payload{Path: "history/part-1.jsonl", Data: randomBytes(t)})
 
 	// when
-	encoded, err := original.Encode()
-	if err != nil {
+	var encoded bytes.Buffer
+	if err := original.Write(&encoded); err != nil {
 		t.Fatal(err)
 	}
-	decoded, err := Decode(bytes.NewReader(encoded))
+	decoded, err := Decode(&encoded)
 
 	// then
 	if err != nil {
@@ -186,4 +187,23 @@ func randomBytes(t *testing.T) []byte {
 		t.Fatal(err)
 	}
 	return data
+}
+
+func TestWriteReportsAFailingOutput(t *testing.T) {
+	original := testArchive(t, Payload{Path: "rollout.jsonl", Data: randomBytes(t)})
+
+	// when
+	err := original.Write(failingWriter{})
+
+	// then
+	if err == nil {
+		t.Fatal("Write() succeeded on a failing output")
+	}
+}
+
+// failingWriter fails every write.
+type failingWriter struct{}
+
+func (failingWriter) Write([]byte) (int, error) {
+	return 0, errors.New("disk full")
 }

@@ -7,20 +7,20 @@ package archive
 
 import (
 	"archive/tar"
+	"bufio"
 	"bytes"
 	"compress/gzip"
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"hash"
 	"io"
 	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
 	"time"
-
-	"github.com/Riki1312/agent-teleport/internal/fsutil"
 )
 
 // Format identifies agent-teleport archives in their manifest.
@@ -35,8 +35,8 @@ const Extension = ".teleport"
 const (
 	manifestPath    = "manifest.json"
 	maxManifestSize = 1 << 20
-	maxPayloadSize  = 512 << 20
-	maxTotalSize    = 1 << 30
+	maxPayloadSize  = 4 << 30
+	maxTotalSize    = 8 << 30
 	maxPayloadFiles = 4096
 )
 
@@ -151,20 +151,48 @@ func (a Archive) Data(path string) ([]byte, bool) {
 	return nil, false
 }
 
-// Encode returns the packed archive. It decodes the result before returning,
-// so a caller never writes an archive that this build cannot read back.
-func (a Archive) Encode() ([]byte, error) {
+// Write streams the packed archive to output. A verifier decodes the stream
+// as it is written, without keeping payloads, so a caller never writes an
+// archive that this build cannot read back.
+func (a Archive) Write(output io.Writer) error {
 	if err := validateManifest(a.Manifest); err != nil {
-		return nil, err
+		return err
 	}
+	reader, writer := io.Pipe()
+	verified := make(chan error, 1)
+	go func() {
+		_, err := decode(reader, false)
+		// Drain the stream so that a failed verification never blocks the
+		// writer.
+		_, _ = io.Copy(io.Discard, reader)
+		verified <- err
+	}()
+	// The compressor writes in small pieces; buffering them keeps system
+	// calls and handoffs to the verifier few.
+	buffered := bufio.NewWriterSize(io.MultiWriter(output, writer), 1<<20)
+	err := a.encode(buffered)
+	if err == nil {
+		err = buffered.Flush()
+	}
+	_ = writer.CloseWithError(err)
+	if verifyErr := <-verified; err == nil && verifyErr != nil {
+		err = fmt.Errorf("verify encoded archive: %w", verifyErr)
+	}
+	return err
+}
+
+func (a Archive) encode(output io.Writer) error {
 	manifestJSON, err := encodeManifest(a.Manifest)
 	if err != nil {
-		return nil, err
+		return err
 	}
 	entries := append([]Payload{{Path: manifestPath, Data: manifestJSON}}, a.Payloads...)
-
-	var encoded bytes.Buffer
-	gzipWriter := gzip.NewWriter(&encoded)
+	// Fast compression keeps exporting a large session quick; session
+	// histories still shrink to about a third.
+	gzipWriter, err := gzip.NewWriterLevel(output, gzip.BestSpeed)
+	if err != nil {
+		return err
+	}
 	tarWriter := tar.NewWriter(gzipWriter)
 	for _, entry := range entries {
 		header := &tar.Header{
@@ -175,35 +203,38 @@ func (a Archive) Encode() ([]byte, error) {
 			Typeflag: tar.TypeReg,
 		}
 		if err := tarWriter.WriteHeader(header); err != nil {
-			return nil, fmt.Errorf("write %s header: %w", entry.Path, err)
+			return fmt.Errorf("write %s header: %w", entry.Path, err)
 		}
 		if _, err := tarWriter.Write(entry.Data); err != nil {
-			return nil, fmt.Errorf("write %s: %w", entry.Path, err)
+			return fmt.Errorf("write %s: %w", entry.Path, err)
 		}
 	}
 	if err := tarWriter.Close(); err != nil {
-		return nil, fmt.Errorf("finish tar archive: %w", err)
+		return fmt.Errorf("finish tar archive: %w", err)
 	}
 	if err := gzipWriter.Close(); err != nil {
-		return nil, fmt.Errorf("finish gzip archive: %w", err)
+		return fmt.Errorf("finish gzip archive: %w", err)
 	}
-	if _, err := Decode(bytes.NewReader(encoded.Bytes())); err != nil {
-		return nil, fmt.Errorf("verify encoded archive: %w", err)
-	}
-	return encoded.Bytes(), nil
+	return nil
 }
 
 // WriteFile writes the packed archive to a new owner-only file at path. It never
 // replaces an existing file and removes a partially written one. It avoids hard
 // links, which removable FAT and exFAT drives do not support.
 func (a Archive) WriteFile(path string) error {
-	encoded, err := a.Encode()
-	if err != nil {
-		return err
-	}
-	err = fsutil.WriteExclusive(path, encoded)
+	file, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
 	if errors.Is(err, fs.ErrExist) {
 		return fmt.Errorf("output already exists: %s", path)
+	}
+	if err != nil {
+		return fmt.Errorf("create archive: %w", err)
+	}
+	err = a.Write(file)
+	if err == nil {
+		err = file.Sync()
+	}
+	if closeErr := file.Close(); err == nil {
+		err = closeErr
 	}
 	if err != nil {
 		_ = os.Remove(path)
@@ -216,6 +247,12 @@ func (a Archive) WriteFile(path string) error {
 // manifest followed by exactly the regular files it lists, in order, within
 // size limits and with matching digests.
 func Decode(input io.Reader) (Archive, error) {
+	return decode(input, true)
+}
+
+// decode reads a packed archive and keeps its payloads when keep is set;
+// otherwise it only validates them.
+func decode(input io.Reader, keep bool) (Archive, error) {
 	gzipReader, err := gzip.NewReader(input)
 	if err != nil {
 		return Archive{}, fmt.Errorf("open gzip archive: %w", err)
@@ -223,7 +260,7 @@ func Decode(input io.Reader) (Archive, error) {
 	defer func() { _ = gzipReader.Close() }()
 	tarReader := tar.NewReader(gzipReader)
 
-	manifestJSON, err := readEntry(tarReader, manifestPath, maxManifestSize)
+	manifestJSON, err := readEntry(tarReader, manifestPath, maxManifestSize, true)
 	if err != nil {
 		return Archive{}, err
 	}
@@ -233,14 +270,20 @@ func Decode(input io.Reader) (Archive, error) {
 	}
 	payloads := make([]Payload, 0, len(manifest.Files))
 	for _, file := range manifest.Files {
-		data, err := readEntry(tarReader, file.Path, file.Size)
+		digest := &digestWriter{hash: sha256.New()}
+		data, err := readEntry(tarReader, file.Path, file.Size, keep, digest)
 		if err != nil {
 			return Archive{}, err
 		}
-		if err := verifyPayload(file, data); err != nil {
-			return Archive{}, err
+		if digest.size != file.Size {
+			return Archive{}, fmt.Errorf("archive entry %q has size %d, manifest lists %d", file.Path, digest.size, file.Size)
 		}
-		payloads = append(payloads, Payload{Path: file.Path, Data: data})
+		if hex.EncodeToString(digest.hash.Sum(nil)) != file.SHA256 {
+			return Archive{}, fmt.Errorf("archive entry %q does not match its checksum", file.Path)
+		}
+		if keep {
+			payloads = append(payloads, Payload{Path: file.Path, Data: data})
+		}
 	}
 	if header, err := tarReader.Next(); err != io.EOF {
 		if err != nil {
@@ -251,7 +294,17 @@ func Decode(input io.Reader) (Archive, error) {
 	return Archive{Manifest: manifest, Payloads: payloads}, nil
 }
 
-func readEntry(reader *tar.Reader, name string, limit int64) ([]byte, error) {
+// digestWriter hashes and counts the bytes written to it.
+type digestWriter struct {
+	hash hash.Hash
+	size int64
+}
+
+// readEntry reads the next entry, which must be the regular file name of at
+// most limit bytes. It returns the entry's data when keep is set, reading it
+// into a buffer of exactly the entry's size, and writes every byte to
+// the digest writers.
+func readEntry(reader *tar.Reader, name string, limit int64, keep bool, digests ...*digestWriter) ([]byte, error) {
 	header, err := reader.Next()
 	if err != nil {
 		return nil, fmt.Errorf("read archive entry %q: %w", name, err)
@@ -265,14 +318,31 @@ func readEntry(reader *tar.Reader, name string, limit int64) ([]byte, error) {
 	if header.Size < 0 || header.Size > limit {
 		return nil, fmt.Errorf("archive entry %q exceeds its size limit", name)
 	}
-	data, err := io.ReadAll(io.LimitReader(reader, limit+1))
+	writers := make([]io.Writer, 0, 1+len(digests))
+	var buffer *bytes.Buffer
+	if keep {
+		buffer = bytes.NewBuffer(make([]byte, 0, header.Size))
+		writers = append(writers, buffer)
+	}
+	for _, digest := range digests {
+		writers = append(writers, digest)
+	}
+	copied, err := io.Copy(io.MultiWriter(append(writers, io.Discard)...), io.LimitReader(reader, limit+1))
 	if err != nil {
 		return nil, fmt.Errorf("read archive entry %q: %w", name, err)
 	}
-	if int64(len(data)) != header.Size {
+	if copied != header.Size {
 		return nil, fmt.Errorf("archive entry %q has an inconsistent size", name)
 	}
-	return data, nil
+	if keep {
+		return buffer.Bytes(), nil
+	}
+	return nil, nil
+}
+
+func (d *digestWriter) Write(data []byte) (int, error) {
+	d.size += int64(len(data))
+	return d.hash.Write(data)
 }
 
 func validateManifest(manifest Manifest) error {

@@ -41,3 +41,23 @@ func TestLayoutForRejectsUnparsableVersions(t *testing.T) {
 		}
 	}
 }
+
+func TestClassifyEventReadsTheTopLevelPayloadType(t *testing.T) {
+	for line, want := range map[string]eventKind{
+		`{"type":"event_msg","payload":{"type":"task_started"}}`: {eventType: "event_msg", payloadType: "task_started"},
+		`{"payload":{"info":{"type":"nested"},"text":"a } \"type\": x","list":[{"type":"no"}],"n":1.5, "type" : "task_complete"},"type":"event_msg"}`: {eventType: "event_msg", payloadType: "task_complete"},
+		`{"type":"session_meta","payload":{"id":"x"}}`: {eventType: "session_meta"},
+		`{"type":"compacted","payload":"text"}`:        {eventType: "compacted"},
+	} {
+		// when
+		kind, err := classifyEvent([]byte(line))
+
+		// then
+		if err != nil || kind != want {
+			t.Fatalf("classifyEvent(%s) = %+v, %v; want %+v", line, kind, err, want)
+		}
+	}
+	if _, err := classifyEvent([]byte(`{"type":"event_msg","payload":{"type":`)); err == nil {
+		t.Fatal("classifyEvent accepted a truncated record")
+	}
+}

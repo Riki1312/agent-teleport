@@ -124,7 +124,7 @@ func TestRelocateRecordsMovesEveryPath(t *testing.T) {
 	)
 
 	// when
-	relocated, err := relocateRecords(transcript, mapping)
+	relocated, err := mapping.RewriteLines(transcript)
 
 	// then
 	if err != nil {
@@ -135,7 +135,7 @@ func TestRelocateRecordsMovesEveryPath(t *testing.T) {
 		`{"type":"attachment","attachment":{"type":"prompt_snapshot","systemPrompt":"memory at /home/b/.claude/projects/-target/memory/"},"cwd":"/target"}`,
 	)
 	if string(relocated) != string(want) {
-		t.Fatalf("relocateRecords() =\n%s\nwant\n%s", relocated, want)
+		t.Fatalf("RewriteLines() =\n%s\nwant\n%s", relocated, want)
 	}
 }
 
@@ -147,11 +147,11 @@ func TestRelocateRecordsRejectsIrreversibleRewrites(t *testing.T) {
 	transcript := lines(`{"type":"user","message":{"role":"user","content":"/work/project and /target"},"cwd":"/work/project"}`)
 
 	// when
-	_, err = relocateRecords(transcript, mapping)
+	_, err = mapping.RewriteLines(transcript)
 
 	// then
 	if !errors.Is(err, pathmap.ErrIrreversible) {
-		t.Fatalf("relocateRecords() error = %v", err)
+		t.Fatalf("RewriteLines() error = %v", err)
 	}
 }
 

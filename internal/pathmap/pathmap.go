@@ -12,7 +12,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -28,6 +27,14 @@ type Move struct {
 // directories nest, the longer one wins.
 type Mapping struct {
 	moves []Move
+	// reversed are the moves of the reverse mapping, kept so that checking
+	// reversibility sorts nothing.
+	reversed []Move
+	// directories are the sources and targets as bytes, and plain reports
+	// whether every one is plain ASCII, so that records without a mention are
+	// recognized cheaply.
+	directories [][]byte
+	plain       bool
 }
 
 // ErrIrreversible reports a record that already mentions a target directory,
@@ -46,8 +53,21 @@ func New(moves ...Move) (Mapping, error) {
 		}
 	}
 	sorted := slices.Clone(moves)
-	slices.SortStableFunc(sorted, func(a, b Move) int { return len(b.From) - len(a.From) })
-	return Mapping{moves: sorted}, nil
+	reversed := make([]Move, len(moves))
+	for index, move := range moves {
+		reversed[index] = Move{From: move.To, To: move.From}
+	}
+	byLongestSource := func(a, b Move) int { return len(b.From) - len(a.From) }
+	slices.SortStableFunc(sorted, byLongestSource)
+	slices.SortStableFunc(reversed, byLongestSource)
+	mapping := Mapping{moves: sorted, reversed: reversed, plain: true}
+	for _, move := range moves {
+		for _, directory := range []string{move.From, move.To} {
+			mapping.directories = append(mapping.directories, []byte(directory))
+			mapping.plain = mapping.plain && isPlainASCII(directory)
+		}
+	}
+	return mapping, nil
 }
 
 // IsEmpty reports whether the mapping moves no directory.
@@ -55,34 +75,137 @@ func (m Mapping) IsEmpty() bool {
 	return len(m.moves) == 0
 }
 
-// Reverse returns the mapping that moves every target back to its source.
-func (m Mapping) Reverse() Mapping {
-	reversed := make([]Move, len(m.moves))
-	for index, move := range m.moves {
-		reversed[index] = Move{From: move.To, To: move.From}
+// mayMention reports whether record can mention a directory of the mapping or
+// of its reverse, which a reversible rewrite must not meet. It skips the
+// decoding of records that cannot, which is most of a large session: a
+// directory of plain ASCII with no character that JSON escapes appears in any
+// encoding of a string as the same bytes, unless the encoder escapes such a
+// character, as \/ or \u0041.
+func (m Mapping) mayMention(record []byte) bool {
+	if !m.plain || escapesPrintableASCII(record) {
+		return true
 	}
-	slices.SortStableFunc(reversed, func(a, b Move) int { return len(b.From) - len(a.From) })
-	return Mapping{moves: reversed}
+	for _, directory := range m.directories {
+		if bytes.Contains(record, directory) {
+			return true
+		}
+	}
+	return false
 }
 
-// Rewrite rewrites the JSON strings in record and returns it with the number of
-// strings changed. With no member names it rewrites the whole record;
-// otherwise record must be a JSON object, and only the values of the named
-// top-level members change. It fails with ErrIrreversible unless the reverse
-// mapping restores record exactly.
-func (m Mapping) Rewrite(record []byte, members ...string) ([]byte, int, error) {
-	rewritten, changed, err := m.rewrite(record, members)
-	if err != nil || changed == 0 {
-		return record, 0, err
+// escapesPrintableASCII reports whether record may hold an escaped printable
+// ASCII character. Control characters, such as terminal escapes, are written
+// as \u0000 to \u001f and do not count.
+func escapesPrintableASCII(record []byte) bool {
+	if bytes.Contains(record, []byte(`\/`)) {
+		return true
 	}
-	restored, _, err := m.Reverse().rewrite(rewritten, members)
-	if err != nil {
-		return nil, 0, err
+	for offset := 0; ; {
+		found := bytes.Index(record[offset:], []byte(`\u00`))
+		if found < 0 || offset+found+4 >= len(record) {
+			return false
+		}
+		if digit := record[offset+found+4]; digit >= '2' && digit <= '7' {
+			return true
+		}
+		offset += found + 4
 	}
-	if !bytes.Equal(restored, record) {
-		return nil, 0, ErrIrreversible
+}
+
+// isPlainASCII reports whether value holds only printable ASCII that JSON
+// never escapes.
+func isPlainASCII(value string) bool {
+	for index := 0; index < len(value); index++ {
+		if value[index] < 0x20 || value[index] > 0x7e || value[index] == '"' || value[index] == '\\' {
+			return false
+		}
 	}
-	return rewritten, changed, nil
+	return true
+}
+
+// Reverse returns the mapping that moves every target back to its source.
+func (m Mapping) Reverse() Mapping {
+	return Mapping{moves: m.reversed, reversed: m.moves, directories: m.directories, plain: m.plain}
+}
+
+// Rewrite moves every mention in the JSON strings of record and fails with
+// ErrIrreversible unless moving back would restore record exactly: every
+// moved string must move back and re-encode to its original bytes, and no
+// other string may mention a target directory. A string, or a whole record,
+// that cannot mention a directory of the mapping is not decoded, so callers
+// validate records themselves.
+func (m Mapping) Rewrite(record []byte) ([]byte, error) {
+	if !m.mayMention(record) {
+		return record, nil
+	}
+	reverse := m.Reverse()
+	var output []byte
+	copied := 0
+	for index := 0; index < len(record); index++ {
+		if record[index] != '"' {
+			continue
+		}
+		start := index
+		end := stringTokenEnd(record, start)
+		if end < 0 {
+			return nil, errors.New("unterminated JSON string")
+		}
+		index = end
+		token := record[start : end+1]
+		if !m.mayMention(token) {
+			continue
+		}
+		var value string
+		if err := json.Unmarshal(token, &value); err != nil {
+			return nil, err
+		}
+		moved := m.Path(value)
+		if moved == value {
+			if reverse.Path(value) != value {
+				return nil, ErrIrreversible
+			}
+			continue
+		}
+		original, err := encodeString(value)
+		if err != nil {
+			return nil, err
+		}
+		if reverse.Path(moved) != value || !bytes.Equal(original, token) {
+			return nil, ErrIrreversible
+		}
+		encoded, err := encodeString(moved)
+		if err != nil {
+			return nil, err
+		}
+		if output == nil {
+			output = make([]byte, 0, len(record)+len(record)/8)
+		}
+		output = append(output, record[copied:start]...)
+		output = append(output, encoded...)
+		copied = end + 1
+	}
+	if output == nil {
+		return record, nil
+	}
+	return append(output, record[copied:]...), nil
+}
+
+// RewriteLines rewrites every record of JSON Lines data, as Rewrite does, into
+// one buffer. Errors name the line.
+func (m Mapping) RewriteLines(data []byte) ([]byte, error) {
+	output := make([]byte, 0, len(data)+len(data)/16)
+	number := 0
+	for line := range bytes.Lines(data) {
+		number++
+		content := bytes.TrimSuffix(line, []byte{'\n'})
+		rewritten, err := m.Rewrite(content)
+		if err != nil {
+			return nil, fmt.Errorf("line %d: %w", number, err)
+		}
+		output = append(output, rewritten...)
+		output = append(output, line[len(content):]...)
+	}
+	return output, nil
 }
 
 // RewriteText moves every mention in plain text, such as a saved tool output,
@@ -94,74 +217,6 @@ func (m Mapping) RewriteText(text []byte) ([]byte, error) {
 		return nil, ErrIrreversible
 	}
 	return rewritten, nil
-}
-
-func (m Mapping) rewrite(record []byte, members []string) ([]byte, int, error) {
-	if len(members) == 0 {
-		return m.rewriteStrings(record)
-	}
-	spans, err := memberValues(record, members)
-	if err != nil {
-		return nil, 0, err
-	}
-	var output []byte
-	copied := 0
-	changed := 0
-	for _, span := range spans {
-		value, count, err := m.rewriteStrings(record[span.start:span.end])
-		if err != nil {
-			return nil, 0, err
-		}
-		if count == 0 {
-			continue
-		}
-		output = append(output, record[copied:span.start]...)
-		output = append(output, value...)
-		copied = span.end
-		changed += count
-	}
-	if changed == 0 {
-		return record, 0, nil
-	}
-	return append(output, record[copied:]...), changed, nil
-}
-
-// rewriteStrings rewrites every JSON string token in data.
-func (m Mapping) rewriteStrings(data []byte) ([]byte, int, error) {
-	var output []byte
-	copied := 0
-	changed := 0
-	for index := 0; index < len(data); index++ {
-		if data[index] != '"' {
-			continue
-		}
-		start := index
-		end := stringTokenEnd(data, start)
-		if end < 0 {
-			return nil, 0, errors.New("unterminated JSON string")
-		}
-		index = end
-		var value string
-		if err := json.Unmarshal(data[start:end+1], &value); err != nil {
-			return nil, 0, err
-		}
-		replaced := m.Path(value)
-		if replaced == value {
-			continue
-		}
-		encoded, err := encodeString(replaced)
-		if err != nil {
-			return nil, 0, err
-		}
-		output = append(output, data[copied:start]...)
-		output = append(output, encoded...)
-		copied = end + 1
-		changed++
-	}
-	if changed == 0 {
-		return data, 0, nil
-	}
-	return append(output, data[copied:]...), changed, nil
 }
 
 // Path replaces each mention of a source directory in value that starts and
@@ -226,44 +281,6 @@ func Within(path, from, to string) (string, error) {
 		return "", fmt.Errorf("%s is not inside %s", path, from)
 	}
 	return filepath.Join(to, relative), nil
-}
-
-// span is the byte range of one JSON value inside a record.
-type span struct {
-	start int
-	end   int
-}
-
-// memberValues returns the byte ranges of the values of the named top-level
-// members of a JSON object, in record order.
-func memberValues(record []byte, names []string) ([]span, error) {
-	decoder := json.NewDecoder(bytes.NewReader(record))
-	if token, err := decoder.Token(); err != nil || token != json.Delim('{') {
-		return nil, errors.New("record is not a JSON object")
-	}
-	var spans []span
-	for decoder.More() {
-		token, err := decoder.Token()
-		if err != nil {
-			return nil, err
-		}
-		name, _ := token.(string)
-		var value json.RawMessage
-		if err := decoder.Decode(&value); err != nil {
-			return nil, err
-		}
-		if slices.Contains(names, name) {
-			end := int(decoder.InputOffset())
-			spans = append(spans, span{start: end - len(value), end: end})
-		}
-	}
-	if _, err := decoder.Token(); err != nil {
-		return nil, err
-	}
-	if _, err := decoder.Token(); !errors.Is(err, io.EOF) {
-		return nil, errors.New("record has trailing data")
-	}
-	return spans, nil
 }
 
 // stringTokenEnd returns the index of the quote closing the JSON string that

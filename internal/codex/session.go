@@ -42,8 +42,25 @@ type rolloutFile struct {
 	object string
 	data   []byte
 	meta   sessionMeta
+	// kinds are the kinds of the object's records, in order.
+	kinds []eventKind
 	// location is the local file the object was read from, if any.
 	location string
+}
+
+// rewritten returns the object with data, a rewrite of its records that
+// keeps their number and kinds, such as a workspace move.
+func (f rolloutFile) rewritten(data []byte) (rolloutFile, error) {
+	first, _, _ := bytes.Cut(data, []byte{'\n'})
+	meta, err := parseMeta(first)
+	if err != nil {
+		return rolloutFile{}, fmt.Errorf("%s: %w", f.name, err)
+	}
+	if bytes.Count(data, []byte{'\n'}) != len(f.kinds) {
+		return rolloutFile{}, fmt.Errorf("rewriting %s changed its records", f.name)
+	}
+	f.data, f.meta = data, meta
+	return f, nil
 }
 
 func (f rolloutFile) isSnapshot() bool {
@@ -105,7 +122,7 @@ func newRolloutFile(name string, data []byte) (rolloutFile, error) {
 	if match == nil {
 		return rolloutFile{}, fmt.Errorf("unsupported rollout file name %q", name)
 	}
-	meta, err := parseRollout(data)
+	meta, kinds, err := parseRollout(data)
 	if err != nil {
 		return rolloutFile{}, fmt.Errorf("%s: %w", name, err)
 	}
@@ -119,7 +136,7 @@ func newRolloutFile(name string, data []byte) (rolloutFile, error) {
 			return rolloutFile{}, fmt.Errorf("snapshot %s does not reference the history it reverts", name)
 		}
 	}
-	return rolloutFile{name: name, object: object, data: data, meta: meta}, nil
+	return rolloutFile{name: name, object: object, data: data, meta: meta, kinds: kinds}, nil
 }
 
 // activeRolloutPath returns where Codex keeps an active rollout with the given
@@ -183,12 +200,9 @@ func (l layout) readSession(home, thread string) (codexSession, error) {
 	for _, head := range heads {
 		// A turn in progress, such as the one running agent-teleport, is left
 		// out, so the archive ends where the session can be resumed.
-		completed, err := l.withoutOpenTurn(head.data)
-		if err != nil {
-			return codexSession{}, fmt.Errorf("%s: %w", head.name, err)
-		}
-		if head, err = newRolloutFile(head.name, completed); err != nil {
-			return codexSession{}, fmt.Errorf("%s has no completed records yet: %w", head.name, err)
+		head = l.withoutOpenTurn(head)
+		if len(head.kinds) == 0 {
+			return codexSession{}, fmt.Errorf("%s has no completed records yet", head.name)
 		}
 		if err := collect(head, 0); err != nil {
 			return codexSession{}, err
@@ -503,9 +517,8 @@ func (l layout) replayTurns(objects map[string]rolloutFile, head rolloutFile) (t
 	}
 	var state turnState
 	for _, segment := range chain {
-		if err := l.advanceTurns(&state, segment.file.data[:segment.end]); err != nil {
-			return turnState{}, fmt.Errorf("%s: %w", segment.file.name, err)
-		}
+		records := bytes.Count(segment.file.data[:segment.end], []byte{'\n'})
+		l.advanceTurns(&state, segment.file.kinds[1:records])
 	}
 	return state, nil
 }
@@ -548,11 +561,14 @@ func (l layout) relocateSession(session codexSession, mapping pathmap.Mapping) (
 				return codexSession{}, fmt.Errorf("%s: %w", file.name, err)
 			}
 		}
-		remapped, _, err := relocateLines(data, mapping)
+		remapped, err := mapping.RewriteLines(data)
+		if errors.Is(err, pathmap.ErrIrreversible) {
+			return codexSession{}, fmt.Errorf("%s: %w; the session already mentions the target directory", file.name, err)
+		}
 		if err != nil {
 			return codexSession{}, fmt.Errorf("%s: %w", file.name, err)
 		}
-		parsed, err := newRolloutFile(file.name, remapped)
+		parsed, err := file.rewritten(remapped)
 		if err != nil {
 			return codexSession{}, err
 		}

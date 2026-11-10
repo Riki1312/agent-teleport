@@ -1,7 +1,6 @@
 package codex
 
 import (
-	"bytes"
 	"encoding/json"
 
 	"github.com/Riki1312/agent-teleport/internal/semver"
@@ -61,23 +60,102 @@ func (l layout) isTurnEnd(kind eventKind) bool {
 }
 
 // classifyEvent decodes only the event and payload types of one rollout line.
+// Rollouts can hold hundreds of megabytes, so the payload is neither copied
+// nor decoded beyond its type.
 func classifyEvent(line []byte) (eventKind, error) {
 	var event struct {
-		Type    string          `json:"type"`
-		Payload json.RawMessage `json:"payload"`
+		Type    string      `json:"type"`
+		Payload payloadType `json:"payload"`
 	}
 	if err := json.Unmarshal(line, &event); err != nil {
 		return eventKind{}, err
 	}
-	kind := eventKind{eventType: event.Type}
-	if bytes.HasPrefix(bytes.TrimSpace(event.Payload), []byte{'{'}) {
-		var payload struct {
-			Type string `json:"type"`
-		}
-		if err := json.Unmarshal(event.Payload, &payload); err != nil {
-			return eventKind{}, err
-		}
-		kind.payloadType = payload.Type
+	return eventKind{eventType: event.Type, payloadType: string(event.Payload)}, nil
+}
+
+// payloadType decodes the type member of an event payload, or nothing for a
+// payload that is not an object.
+type payloadType string
+
+// UnmarshalJSON reads the payload's top-level type member. The outer decode
+// has already validated the JSON, so the members are only skipped over.
+func (p *payloadType) UnmarshalJSON(data []byte) error {
+	if len(data) == 0 || data[0] != '{' {
+		return nil
 	}
-	return kind, nil
+	for index := 1; index < len(data); {
+		index = skipSpace(data, index)
+		if data[index] != '"' {
+			return nil
+		}
+		keyEnd := stringEnd(data, index)
+		key := data[index+1 : keyEnd]
+		index = skipSpace(data, keyEnd+1) + 1
+		index = skipSpace(data, index)
+		valueEnd := valueEnd(data, index)
+		if string(key) == "type" && data[index] == '"' {
+			var value string
+			if err := json.Unmarshal(data[index:valueEnd], &value); err != nil {
+				return err
+			}
+			*p = payloadType(value)
+			return nil
+		}
+		index = skipSpace(data, valueEnd)
+		if index >= len(data) || data[index] != ',' {
+			return nil
+		}
+		index++
+	}
+	return nil
+}
+
+func skipSpace(data []byte, index int) int {
+	for index < len(data) && (data[index] == ' ' || data[index] == '\t' || data[index] == '\n' || data[index] == '\r') {
+		index++
+	}
+	return index
+}
+
+// stringEnd returns the index of the quote closing the string at start.
+func stringEnd(data []byte, start int) int {
+	for index := start + 1; index < len(data); index++ {
+		switch data[index] {
+		case '\\':
+			index++
+		case '"':
+			return index
+		}
+	}
+	return len(data) - 1
+}
+
+// valueEnd returns the index just after the valid JSON value at start.
+func valueEnd(data []byte, start int) int {
+	switch data[start] {
+	case '"':
+		return stringEnd(data, start) + 1
+	case '{', '[':
+		depth := 0
+		for index := start; index < len(data); index++ {
+			switch data[index] {
+			case '"':
+				index = stringEnd(data, index)
+			case '{', '[':
+				depth++
+			case '}', ']':
+				depth--
+				if depth == 0 {
+					return index + 1
+				}
+			}
+		}
+		return len(data)
+	default:
+		index := start
+		for index < len(data) && data[index] != ',' && data[index] != '}' && data[index] != ']' {
+			index++
+		}
+		return index
+	}
 }

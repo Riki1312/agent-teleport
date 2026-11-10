@@ -75,7 +75,7 @@ func (l layout) replaceRollout(
 	if oldMeta.ID != meta.ID {
 		return fmt.Errorf("existing rollout has session ID %s, want %s", oldMeta.ID, meta.ID)
 	}
-	replacementMeta, err := parseRollout(replacement)
+	replacementMeta, _, err := parseRollout(replacement)
 	if err != nil {
 		return fmt.Errorf("validate replacement rollout: %w", err)
 	}
@@ -197,7 +197,8 @@ func readRolloutMeta(path string) (sessionMeta, error) {
 	if err != nil {
 		return sessionMeta{}, err
 	}
-	return parseRollout(data)
+	meta, _, err := parseRollout(data)
+	return meta, err
 }
 
 func runCheckpoint(checkpoint checkpointFunc, phase replacePhase) error {

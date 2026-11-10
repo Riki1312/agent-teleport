@@ -197,11 +197,7 @@ func (a *App) export(ctx context.Context, args []string) error {
 	}
 	name := adapterFor(session.Provider).Name
 	if *output == "-" {
-		encoded, err := exported.Encode()
-		if err != nil {
-			return err
-		}
-		if _, err := a.Stdout.Write(encoded); err != nil {
+		if err := exported.Write(a.Stdout); err != nil {
 			return fmt.Errorf("write archive to stdout: %w", err)
 		}
 		_, err = fmt.Fprintf(a.Stderr, "exported %s session %s\n", name, session.ID)
@@ -600,6 +596,12 @@ func (a *App) selectStoredSession(opened stores, selector string, last, includeA
 	if selector == "" && !last && insideAgent() {
 		return opened.current()
 	}
+	// A full ID needs no listing, which reads every session.
+	if isSessionID(selector) {
+		if session, err := opened.session(selector); err == nil {
+			return session, nil
+		}
+	}
 	sessions, err := a.sessions(opened, includeAll)
 	if err != nil {
 		return provider.Session{}, err
@@ -607,11 +609,7 @@ func (a *App) selectStoredSession(opened stores, selector string, last, includeA
 	if selector == "" && !last {
 		return a.chooseSession(sessions, includeAll)
 	}
-	session, err := selectSession(sessions, selector, last)
-	if errors.Is(err, errNoMatch) && isSessionID(selector) {
-		session, err = opened.session(selector)
-	}
-	return session, err
+	return selectSession(sessions, selector, last)
 }
 
 // chooseSession asks the person at the terminal to choose one of sessions.
