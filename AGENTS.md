@@ -45,3 +45,5 @@ Use sanitized fixtures only, produced with `tools/sanitize-fixture` and reviewed
 ## Commits
 
 Use conventional commits: `feat:`, `fix:`, `refactor:`, `test:`, `docs:`, or `chore:`, with `!` for breaking changes. Keep each commit focused on one logical change.
+
+Release by pushing a `vX.Y.Z` tag on a commit of `main` whose CI passed. The release workflow tests, builds the archives with `make dist`, checks that the binary reports the tag as its version, and publishes them with checksums. `make dist` works locally too.

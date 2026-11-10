@@ -9,7 +9,7 @@ description: Save this coding session in the Git repository so it can be committ
 
 ## Before running a command
 
-Check that the CLI is installed with `agent-teleport --version`. If it is missing, tell the user that it installs with `go install github.com/Riki1312/agent-teleport/cmd/agent-teleport@latest`, and install it only if they ask you to.
+Check that the CLI is installed with `agent-teleport --version`. If it is missing, point the user to the binaries of the latest release at https://github.com/Riki1312/agent-teleport/releases/latest, or to `go install github.com/Riki1312/agent-teleport/cmd/agent-teleport@latest`, and install it only if they ask you to.
 
 ## Save this session
 

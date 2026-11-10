@@ -15,6 +15,7 @@
 - Import applies the fast-forward update rule. `--replace` uses the recoverable rollback transaction for single-thread Codex sessions and atomic renames for Claude Code sessions; other diverged Codex sessions must be deleted in Codex first.
 - Moving a session rewrites every boundary-delimited mention of the workspace in every record and saved tool output and preserves all other bytes; moving there and back is the identity on the native fixtures.
 - Collision checks cover active and archived Codex sessions.
+- Releases come from `v*` tags: the release workflow publishes `make dist` archives for Linux and macOS with checksums.
 - CI runs golangci-lint (doc comments required), Prettier, and the Go tests on Linux and macOS, with the required two-home E2E tests; each job pairs one Codex version (0.165.0 to 0.167.0) with one Claude Code version (2.1.317 to 2.1.321). `make check` runs the same checks locally.
 - Whole sessions transfer: sub-agent threads, forks with their ancestor prefixes, and reverts, which import replays through `thread/revert`. Updates append records under Codex's thread writer lock.
 - The CLI works through `provider.Adapter` and `provider.Store`; path rewriting, durable file writes, and version ordering are shared packages.
@@ -26,7 +27,7 @@
 ## Next work
 
 1. Add fish completion once fish can be tested.
-2. Publishing: the plugin marketplace and `go install` work for people without access only once the repository is public.
+2. Publishing: the plugin marketplace, release downloads, and `go install` work for people without access only once the repository is public; private vulnerability reporting must then be enabled for `SECURITY.md`.
 
 ## Open questions
 

@@ -158,6 +158,12 @@ Each entry uses this shape:
 - `rationale`: Abstractions drawn from two concrete adapters fit both without speculative extension points.
 - `impact`: The CLI imports no adapter-specific types; a new provider implements `provider.Store` and registers a `provider.Adapter`.
 
+### Release prebuilt binaries from tags
+
+- `decision`: A `vX.Y.Z` tag triggers a workflow that builds static, stripped binaries for Linux and macOS on amd64 and arm64 with `make dist`, packs each with its license and README, and publishes them with `SHA256SUMS`. Go stamps the version from the tag. Binaries are not signed or notarized.
+- `rationale`: Most agent users do not have Go, and the plugin needs the CLI installed; one Makefile target keeps local and release builds identical without a release tool.
+- `impact`: Archives have stable names, so `releases/latest/download/agent-teleport_<os>_<arch>.tar.gz` always fetches the newest one. A browser download on macOS needs its quarantine attribute removed.
+
 ### Enforce doc comments and Markdown formatting
 
 - `decision`: Require doc comments on exported Go identifiers through golangci-lint, and format Markdown with a pinned Prettier through `npx`, with prose left unwrapped.
