@@ -1,0 +1,22 @@
+SECURITY.md
+  s_b3feabb7857cd3::t_0dced6a8a080c4 1-20
+README.md
+  s_b3feabb7857cd3::t_699cb8f6da654c 3-15,18-19,22-30,38,41,44,49,51,53,55-57,60,62-64,67-69,72-76,78,80-83,85,87,94,97
+  s_b3feabb7857cd3::t_0dced6a8a080c4 58
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.2",
+  "base_commit_sha": "c389a143225beb3b00c56771db41d3d50d631026",
+  "prompts": {},
+  "sessions": {
+    "s_b3feabb7857cd3": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "fd1b6ebe-1b52-4a20-8b44-740169df5be6",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Riccardo <riki.brero@gmail.com>"
+    }
+  }
+}
