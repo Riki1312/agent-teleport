@@ -1,0 +1,31 @@
+context/decisions.md
+  s_b3feabb7857cd3::t_b83af259cb0ca4 161-166
+.github/workflows/release.yml
+  s_b3feabb7857cd3::t_3037081e1a48e4 1-28
+plugins/agent-teleport/skills/teleport/SKILL.md
+  s_b3feabb7857cd3::t_b83af259cb0ca4 12
+README.md
+  s_b3feabb7857cd3::t_b83af259cb0ca4 34,37-38,42
+Makefile
+  s_b3feabb7857cd3::t_51ede689ba07ae 4-7,25-38
+context/current.md
+  s_b3feabb7857cd3::t_b83af259cb0ca4 18,30
+AGENTS.md
+  s_b3feabb7857cd3::t_b83af259cb0ca4 48-49
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.2",
+  "base_commit_sha": "73c9d10dda39e2ed8eca9e905ba47bfc311aaefa",
+  "prompts": {},
+  "sessions": {
+    "s_b3feabb7857cd3": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "fd1b6ebe-1b52-4a20-8b44-740169df5be6",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Riccardo <riki.brero@gmail.com>"
+    }
+  }
+}
