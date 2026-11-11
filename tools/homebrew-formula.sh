@@ -31,7 +31,6 @@ cat <<EOF
 class AgentTeleport < Formula
   desc "Keep coding-agent sessions in your repository and move them between machines"
   homepage "https://github.com/Riki1312/agent-teleport"
-  version "$version"
   license "MIT"
 
   on_macos do
