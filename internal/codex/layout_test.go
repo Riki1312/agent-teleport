@@ -14,7 +14,8 @@ func TestLayoutForVersions(t *testing.T) {
 		{version: "0.164.9", supported: false},
 		{version: "0.165.0-alpha.1", supported: false},
 		{version: "0.165.0", supported: true, tested: true},
-		{version: "0.167.0", supported: true, tested: true},
+		{version: "0.167.1", supported: true, tested: true},
+		{version: "0.167.2", supported: true, tested: false},
 		{version: "0.168.0-alpha.1", supported: true, tested: false},
 		{version: "1.0.0", supported: true, tested: false},
 	} {

@@ -88,8 +88,8 @@ An archive or a saved session holds the recorded history and nothing else. Proje
 
 | Agent       | Supported        | Tested through |
 | ----------- | ---------------- | -------------- |
-| Codex       | 0.165.0 or newer | 0.167.0        |
-| Claude Code | 2.1.317 or newer | 2.1.321        |
+| Codex       | 0.165.0 or newer | 0.167.1        |
+| Claude Code | 2.1.317 or newer | 2.1.322        |
 
 Linux and macOS are supported. The agents' session files are private formats that change often, so `agent-teleport` checks every file against the layouts it knows and refuses what it does not recognize instead of guessing; `doctor` warns about agent versions newer than the tested ones. The project is young, and the archive format may still change before its first stable release.
 

@@ -163,8 +163,8 @@ func TestLayoutForVersions(t *testing.T) {
 	}{
 		{version: "2.1.316", supported: false},
 		{version: "2.1.317", supported: true, tested: true},
-		{version: "2.1.321", supported: true, tested: true},
-		{version: "2.1.322", supported: true, tested: false},
+		{version: "2.1.322", supported: true, tested: true},
+		{version: "2.1.323", supported: true, tested: false},
 	} {
 		// when
 		_, tested, err := layoutFor(test.version)

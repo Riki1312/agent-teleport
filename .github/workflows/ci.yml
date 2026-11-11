@@ -43,7 +43,7 @@ jobs:
         agents:
           - { codex: 0.165.0, claude: 2.1.317 }
           - { codex: 0.166.0, claude: 2.1.319 }
-          - { codex: 0.167.0, claude: 2.1.321 }
+          - { codex: 0.167.1, claude: 2.1.322 }
     name: test (${{ matrix.os }}, Codex ${{ matrix.agents.codex }}, Claude Code ${{ matrix.agents.claude }})
     runs-on: ${{ matrix.os }}
     steps:

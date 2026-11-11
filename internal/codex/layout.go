@@ -36,7 +36,7 @@ type layout struct {
 var layouts = []layout{
 	{
 		minimum:      "0.165.0",
-		newestTested: "0.167.0",
+		newestTested: "0.167.1",
 		turnStarted:  eventKind{eventType: "event_msg", payloadType: "task_started"},
 		turnEnded: map[eventKind]struct{}{
 			{eventType: "event_msg", payloadType: "task_complete"}: {},

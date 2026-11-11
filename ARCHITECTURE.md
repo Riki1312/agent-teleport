@@ -181,7 +181,7 @@ Any failure or interruption before the commit point restores the old rollout, de
 
 ### Supported versions
 
-Each rollout layout covers a range of Codex versions: its turn boundary events, its workspace metadata events, and the size of its revert header. The current layout starts at Codex 0.165.0 and is tested through 0.167.0. Older versions fail closed. Newer versions are accepted with a `doctor` warning, because Codex releases every few days, while structural validation still rejects rollouts it does not recognize. CI runs the two-home test against every tested version, and raising the tested range requires it to pass against the new release. Older layouts are removed rather than kept.
+Each rollout layout covers a range of Codex versions: its turn boundary events, its workspace metadata events, and the size of its revert header. The current layout starts at Codex 0.165.0 and is tested through 0.167.1. Older versions fail closed. Newer versions are accepted with a `doctor` warning, because Codex releases every few days, while structural validation still rejects rollouts it does not recognize. CI runs the two-home test against every tested version, and raising the tested range requires it to pass against the new release. Older layouts are removed rather than kept.
 
 ## Claude Code adapter
 
@@ -206,7 +206,7 @@ Claude Code has no index and no server: it resumes a session by finding its tran
 
 ### Supported versions
 
-The current layout starts at Claude Code 2.1.317 and is tested through 2.1.321, with the same rules as Codex: older versions fail closed, newer versions are accepted with a `doctor` warning, and structural validation rejects unknown files.
+The current layout starts at Claude Code 2.1.317 and is tested through 2.1.322, with the same rules as Codex: older versions fail closed, newer versions are accepted with a `doctor` warning, and structural validation rejects unknown files.
 
 ## Repository sessions
 
