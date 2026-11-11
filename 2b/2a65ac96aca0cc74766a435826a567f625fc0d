@@ -1,0 +1,36 @@
+ARCHITECTURE.md
+  s_b3feabb7857cd3::t_c95e15f0622bfc 184,209
+internal/claude/transcript_test.go
+  s_b3feabb7857cd3::t_c95e15f0622bfc 166-167
+context/current.md
+  s_b3feabb7857cd3::t_c95e15f0622bfc 6,19,63
+  s_b3feabb7857cd3::t_c1654624bf961b 50
+internal/claude/layout.go
+  s_b3feabb7857cd3::t_c95e15f0622bfc 21
+internal/codex/layout_test.go
+  s_b3feabb7857cd3::t_c95e15f0622bfc 17-18
+README.md
+  s_b3feabb7857cd3::t_c95e15f0622bfc 91-92
+internal/codex/layout.go
+  s_b3feabb7857cd3::t_c95e15f0622bfc 39
+context/decisions.md
+  s_b3feabb7857cd3::t_c95e15f0622bfc 73
+.github/workflows/ci.yml
+  s_b3feabb7857cd3::t_c95e15f0622bfc 46
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.2",
+  "base_commit_sha": "2b2a65ac96aca0cc74766a435826a567f625fc0d",
+  "prompts": {},
+  "sessions": {
+    "s_b3feabb7857cd3": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "fd1b6ebe-1b52-4a20-8b44-740169df5be6",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Riccardo <riki.brero@gmail.com>"
+    }
+  }
+}
