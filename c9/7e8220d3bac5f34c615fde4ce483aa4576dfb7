@@ -1,0 +1,35 @@
+AGENTS.md
+  s_b3feabb7857cd3::t_3cf7b7a23bdd0c 49
+context/decisions.md
+  s_b3feabb7857cd3::t_3cf7b7a23bdd0c 165
+README.md
+  s_b3feabb7857cd3::t_3cf7b7a23bdd0c 34-41,58
+test/e2e/completion_test.go
+  s_b3feabb7857cd3::t_8c63caf8a22ca7 41-42,48-61,63-69
+tools/homebrew-formula.sh
+  s_b3feabb7857cd3::t_210f9afc125aa9 1-21,28-38,40-41,43-47,49-50,52-64
+  s_b3feabb7857cd3::t_45a1696ecf9280 22,27,39,42,48,51
+  s_b3feabb7857cd3::t_bced26eb1df447 23-26
+.github/workflows/release.yml
+  s_b3feabb7857cd3::t_3cf7b7a23bdd0c 29-44
+plugins/agent-teleport/skills/teleport/SKILL.md
+  s_b3feabb7857cd3::t_3cf7b7a23bdd0c 12
+internal/cli/completion.go
+  s_b3feabb7857cd3::t_8c63caf8a22ca7 196-198
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.2",
+  "base_commit_sha": "c97e8220d3bac5f34c615fde4ce483aa4576dfb7",
+  "prompts": {},
+  "sessions": {
+    "s_b3feabb7857cd3": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "fd1b6ebe-1b52-4a20-8b44-740169df5be6",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Riccardo <riki.brero@gmail.com>"
+    }
+  }
+}
