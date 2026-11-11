@@ -193,7 +193,9 @@ _agent_teleport() {
     done
     _describe -t values agent-teleport described
 }
-if [[ ${funcstack[1]} == _agent_teleport ]]; then
+# Autoloaded from fpath, under either name, this file completes right away;
+# sourced, it registers the function.
+if [[ ${funcstack[1]} == _agent[-_]teleport ]]; then
     _agent_teleport "$@"
 else
     compdef _agent_teleport agent-teleport

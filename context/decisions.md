@@ -162,7 +162,7 @@ Each entry uses this shape:
 
 - `decision`: A `vX.Y.Z` tag triggers a workflow that builds static, stripped binaries for Linux and macOS on amd64 and arm64 with `make dist`, packs each with its license and README, and publishes them with `SHA256SUMS`. Go stamps the version from the tag. Binaries are not signed or notarized.
 - `rationale`: Most agent users do not have Go, and the plugin needs the CLI installed; one Makefile target keeps local and release builds identical without a release tool.
-- `impact`: Archives have stable names, so `releases/latest/download/agent-teleport_<os>_<arch>.tar.gz` always fetches the newest one. A browser download on macOS needs its quarantine attribute removed.
+- `impact`: Archives have stable names, so `releases/latest/download/agent-teleport_<os>_<arch>.tar.gz` always fetches the newest one. A browser download on macOS needs its quarantine attribute removed. Each release also commits a generated formula to the shared tap `Riki1312/homebrew-tap`, which installs the binaries and their bash and zsh completion; the workflow needs the `HOMEBREW_TAP_GITHUB_TOKEN` secret that nt-cli uses for the same tap.
 
 ### Enforce doc comments and Markdown formatting
 

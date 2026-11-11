@@ -31,12 +31,18 @@ git add .agent-teleport && git commit -m "Share the fix-login session"
 
 ## Install
 
-Download the binary for your platform from the [latest release](https://github.com/Riki1312/agent-teleport/releases/latest): `darwin_arm64`, `darwin_amd64`, `linux_amd64`, or `linux_arm64`.
+With Homebrew, on macOS or Linux, which also installs shell completion:
+
+```sh
+brew install riki1312/tap/agent-teleport
+agent-teleport doctor               # checks the installed agents
+```
+
+Or download the binary for your platform from the [latest release](https://github.com/Riki1312/agent-teleport/releases/latest): `darwin_arm64`, `darwin_amd64`, `linux_amd64`, or `linux_arm64`.
 
 ```sh
 curl -fsSL https://github.com/Riki1312/agent-teleport/releases/latest/download/agent-teleport_darwin_arm64.tar.gz | tar -xz agent-teleport
 sudo mv agent-teleport /usr/local/bin/
-agent-teleport doctor               # checks the installed agents
 ```
 
 The binaries are not notarized, so on macOS a copy downloaded through a browser needs `xattr -d com.apple.quarantine agent-teleport` once; `curl` downloads need nothing. Checksums are in each release's `SHA256SUMS`. With Go 1.25 or newer, `go install github.com/Riki1312/agent-teleport/cmd/agent-teleport@latest` builds it instead.
@@ -49,7 +55,7 @@ codex plugin marketplace add Riki1312/agent-teleport                  # in a she
 codex plugin add agent-teleport@agent-teleport
 ```
 
-For tab completion, add `eval "$(agent-teleport completion bash)"` to `~/.bashrc`, or `source <(agent-teleport completion zsh)` to `~/.zshrc`.
+Without Homebrew, add `eval "$(agent-teleport completion bash)"` to `~/.bashrc`, or `source <(agent-teleport completion zsh)` to `~/.zshrc`, for tab completion.
 
 ## Sessions in the repository
 

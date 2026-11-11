@@ -26,3 +26,19 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: gh release create "$GITHUB_REF_NAME" dist/*.tar.gz dist/SHA256SUMS --verify-tag --title "$GITHUB_REF_NAME" --generate-notes
+      - name: Update the Homebrew formula
+        env:
+          TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_GITHUB_TOKEN }}
+        run: |
+          if [ -z "$TAP_TOKEN" ]; then
+            echo "::error::HOMEBREW_TAP_GITHUB_TOKEN is not set, so the Homebrew formula was not updated"
+            exit 1
+          fi
+          git clone --depth 1 "https://x-access-token:${TAP_TOKEN}@github.com/Riki1312/homebrew-tap.git" tap
+          tools/homebrew-formula.sh "${GITHUB_REF_NAME#v}" dist/SHA256SUMS > tap/Formula/agent-teleport.rb
+          cd tap
+          git config user.name "github-actions[bot]"
+          git config user.email "41898283+github-actions[bot]@users.noreply.github.com"
+          git add Formula/agent-teleport.rb
+          git commit -m "agent-teleport ${GITHUB_REF_NAME}"
+          git push

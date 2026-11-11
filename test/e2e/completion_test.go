@@ -38,22 +38,35 @@ printf '%s\n' "${COMPREPLY[@]}"`
 }
 
 // TestZshCompletion requires the zsh script to parse and to register its
-// completion function.
+// completion function, both sourced and installed in fpath under the name
+// Homebrew gives it.
 func TestZshCompletion(t *testing.T) {
 	if _, err := exec.LookPath("zsh"); err != nil {
 		t.Skip("zsh is not installed")
 	}
 	binary := buildAgentTeleport(t)
-	script := `autoload -U compinit && compinit -u -D
-source <(agent-teleport completion zsh)
-print -r -- ${_comps[agent-teleport]}`
+	functions := t.TempDir()
+	script, err := exec.Command(binary, "completion", "zsh").Output()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(functions, "_agent-teleport"), script, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	for name, setup := range map[string]string{
+		"sourced":  `autoload -U compinit && compinit -u -D && source <(agent-teleport completion zsh)`,
+		"in fpath": `fpath=(` + functions + ` $fpath) && autoload -U compinit && compinit -u -D`,
+	} {
+		// when
+		registered := runShell(t, "zsh", binary, t.TempDir(), setup+"\nprint -r -- ${_comps[agent-teleport]}")
 
-	// when
-	registered := runShell(t, "zsh", binary, t.TempDir(), script)
-
-	// then
-	if registered != "_agent_teleport" {
-		t.Fatalf("zsh completion registers %q", registered)
+		// then
+		if !strings.HasPrefix(registered, "_agent") {
+			t.Fatalf("zsh completion %s registers %q", name, registered)
+		}
+	}
+	if output, err := exec.Command("zsh", "-n", filepath.Join(functions, "_agent-teleport")).CombinedOutput(); err != nil {
+		t.Fatalf("zsh -n: %v: %s", err, output)
 	}
 }
 
