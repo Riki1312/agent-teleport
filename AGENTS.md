@@ -5,7 +5,7 @@ This repository contains `agent-teleport`, a Go CLI that moves resumable coding-
 ## Working principles
 
 - Work autonomously when the path is clear; ask before making a foundational choice that is not recorded in `ARCHITECTURE.md` or `context/decisions.md`.
-- Prefer the smallest design that is correct, observable, and easy to remove. Remove replaced code, tests, and documentation instead of keeping compatibility paths; nothing has been released yet.
+- Prefer the smallest design that is correct, observable, and easy to remove. Remove replaced code, tests, and documentation instead of keeping compatibility paths.
 - Treat provider storage as an unstable private detail. Unknown layouts fail closed.
 - Prefer supported provider interfaces, such as Codex App Server, over writing provider databases.
 - Keep archive and CLI concepts provider-neutral. Extract shared provider abstractions from concrete adapters, not in advance.

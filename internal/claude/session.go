@@ -214,11 +214,10 @@ func readRecords(path string) ([]byte, error) {
 	return completeRecords(data), nil
 }
 
-// withoutTurnInProgress returns the session as it was before its last prompt,
-// for a session whose turn is still running, together with the sub-agents
-// that the remaining transcript started.
+// withoutTurnInProgress keeps a completed transcript prefix for a session
+// whose turn is still running, together with the sub-agents that prefix started.
 func (s claudeSession) withoutTurnInProgress() (claudeSession, error) {
-	transcript := s.files[0].data[:lastPromptOffset(s.files[0].data)]
+	transcript := s.files[0].data[:completedTranscriptEnd(s.files[0].data)]
 	files := []sessionFile{{path: s.files[0].path, data: transcript}}
 	for _, file := range s.files[1:] {
 		if file.agent == "" || startedIn(transcript, s.agentToolUse(file.agent)) {

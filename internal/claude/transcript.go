@@ -104,31 +104,45 @@ func parseTranscript(data []byte, sessionID, agentID string) (transcriptInfo, er
 	return info, nil
 }
 
-// lastPromptOffset returns the byte offset where the turn of the last prompt
-// a person sent in the main conversation starts: at the queue records that
-// enqueued the prompt, or at the prompt itself.
-func lastPromptOffset(data []byte) int {
-	last, offset, queued := 0, 0, -1
+// completedTranscriptEnd returns the end of completed main-conversation
+// history. An unfinished prompt is excluded together with its queue records.
+// If a follow-up is queued during a turn, exclude that whole turn too until
+// the follow-up completes: its queue records interleave with the earlier turn.
+func completedTranscriptEnd(data []byte) int {
+	end, offset := 0, 0
+	active, queued := false, false
 	for line := range bytes.Lines(data) {
 		var entry record
 		_ = json.Unmarshal(line, &entry)
 		switch {
 		case entry.Type == "queue-operation":
-			if queued < 0 {
-				queued = offset
+			if !queued && !active {
+				end = offset
 			}
+			queued = true
+		case entry.Type == "assistant" && !entry.IsSidechain && messageEndedTurn(entry.Message):
+			if !queued {
+				end = len(data)
+			}
+			active = false
 		case entry.Type == "user" && !entry.IsMeta && !entry.IsSidechain && promptText(entry.Message) != "":
-			last = offset
-			if queued >= 0 {
-				last = queued
+			if !queued {
+				end = offset
 			}
-			queued = -1
-		default:
-			queued = -1
+			active, queued = true, false
 		}
 		offset += len(line)
 	}
-	return last
+	return end
+}
+
+// messageEndedTurn recognizes a terminal assistant response, rather than a
+// tool call whose result is still pending.
+func messageEndedTurn(message []byte) bool {
+	var value struct {
+		StopReason string `json:"stop_reason"`
+	}
+	return json.Unmarshal(message, &value) == nil && value.StopReason == "end_turn"
 }
 
 // workspaceIn returns the recorded working directory whose project folder is

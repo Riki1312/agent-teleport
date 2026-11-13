@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"slices"
 	"strings"
 
 	"github.com/Riki1312/agent-teleport/internal/archive"
@@ -472,31 +471,77 @@ func (s *Store) replayRevert(session codexSession, snapshot rolloutFile, objects
 	if err != nil {
 		return localObject{}, err
 	}
-	if err := s.requireRevertHeader(native, snapshot); err != nil {
-		return localObject{}, err
-	}
-	continuation, err := s.layout.snapshotContinuation(snapshot)
+	expected, err := s.pointAtLocalObjects(snapshot, objects)
 	if err != nil {
 		return localObject{}, err
 	}
-	if len(continuation) > 0 {
-		if err := appendRecords(s.home, thread, created[0], int64(len(native.data)), continuation); err != nil {
-			return localObject{}, err
-		}
+	restored, err := s.restoreRevert(native, expected)
+	if err != nil {
+		return localObject{}, err
 	}
-	return localObject{object: native.object, data: append(native.data, continuation...), from: snapshot.data}, nil
+	return localObject{object: native.object, data: restored, from: snapshot.data}, nil
 }
 
-// requireRevertHeader checks that Codex's replayed snapshot consists of
-// exactly a revert header with the same records as the archived snapshot's.
-func (s *Store) requireRevertHeader(native, archived rolloutFile) error {
-	if len(native.kinds) != s.layout.revertHeaderRecords || len(archived.kinds) < len(native.kinds) {
-		return fmt.Errorf("Codex wrote a revert header of %d records, want %d", len(native.kinds), s.layout.revertHeaderRecords)
+// restoreRevert commits the archived settings and continuation together under
+// the writer lock. Only the newly generated snapshot may be replaced, and it
+// must still match what Codex wrote before the lock was acquired.
+func (s *Store) restoreRevert(native, archived rolloutFile) ([]byte, error) {
+	restored, err := s.revertSnapshot(native, archived)
+	if err != nil {
+		return nil, err
 	}
-	if !slices.Equal(native.kinds, archived.kinds[:len(native.kinds)]) {
-		return errors.New("Codex wrote a different revert header than the archived snapshot")
+	unlock, err := lockThread(s.home, native.meta.ID)
+	if err != nil {
+		return nil, err
 	}
-	return nil
+	defer unlock()
+	current, err := fsutil.ReadRegular(native.location)
+	if err != nil {
+		return nil, fmt.Errorf("read replayed snapshot: %w", err)
+	}
+	if !bytes.Equal(current, native.data) {
+		return nil, errors.New("replayed snapshot changed before its history was restored")
+	}
+	if err := fsutil.WriteAtomic(native.location, restored); err != nil {
+		return nil, fmt.Errorf("restore replayed snapshot: %w", err)
+	}
+	return restored, nil
+}
+
+// revertSnapshot keeps Codex's generated metadata and restores all archived
+// records after it. Native revert may write a second settings record for the
+// loading process; both generated settings records give way to recorded history.
+func (s *Store) revertSnapshot(native, archived rolloutFile) ([]byte, error) {
+	count := s.layout.revertHeaderRecords
+	settings := eventKind{eventType: "event_msg", payloadType: "thread_settings_applied"}
+	if len(native.kinds) < count || len(archived.kinds) < count || archived.kinds[1] != settings {
+		return nil, errors.New("Codex wrote a different revert header than the archived snapshot")
+	}
+	if len(native.kinds) > count+1 {
+		return nil, fmt.Errorf("Codex wrote a revert header of %d records, want %d or %d", len(native.kinds), count, count+1)
+	}
+	for _, kind := range native.kinds[1:] {
+		if kind != settings {
+			return nil, errors.New("Codex wrote unexpected records after its revert metadata")
+		}
+	}
+	if native.meta.ID != archived.meta.ID || native.meta.SessionID != archived.meta.SessionID || native.meta.CWD != archived.meta.CWD || native.meta.Base == nil || archived.meta.Base == nil || *native.meta.Base != *archived.meta.Base {
+		return nil, errors.New("Codex reverted a different history than the archived snapshot")
+	}
+	meta, _, _ := bytes.Cut(native.data, []byte{'\n'})
+	archivedMeta, continuation, _ := bytes.Cut(archived.data, []byte{'\n'})
+	nativeOrdinal, err := lastOrdinal(meta)
+	if err != nil {
+		return nil, err
+	}
+	archivedOrdinal, err := lastOrdinal(archivedMeta)
+	if err != nil || nativeOrdinal != archivedOrdinal {
+		return nil, errors.New("Codex wrote a different revert ordinal than the archived snapshot")
+	}
+	restored := make([]byte, 0, len(meta)+1+len(continuation))
+	restored = append(restored, meta...)
+	restored = append(restored, '\n')
+	return append(restored, continuation...), nil
 }
 
 func newPaths(before, after []string) []string {

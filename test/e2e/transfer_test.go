@@ -65,15 +65,31 @@ func TestTwoHomeTransfer(t *testing.T) {
 		"import", shortPath, "--cwd", targetAlias), "imported")
 	assertListedCWD(t, run(t, binary, codexPath, targetHome, nil, true,
 		"list", "--all", "--json"), fixture.ID, targetCWD)
-	openSession, err := appserver.Start(context.Background(), codexPath, targetHome)
+	// Resume can append settings; keep this probe separate from fast-forward updates.
+	busyHome := mkdir(t, filepath.Join(work, "busy-home"))
+	run(t, binary, codexPath, busyHome, nil, true, "import", shortPath, "--cwd", targetCWD)
+	openSession, err := appserver.Start(context.Background(), codexPath, busyHome)
 	if err != nil {
 		t.Fatal(err)
 	}
+	t.Cleanup(openSession.Close)
 	if _, err := openSession.Resume(fixture.ID, ""); err != nil {
 		t.Fatalf("open session: %v", err)
 	}
-	run(t, binary, codexPath, targetHome, nil, false,
-		"import", archivePath, "--cwd", targetCWD)
+	busyPath := filepath.Join(busyHome, strings.TrimPrefix(fixture.Path, sourceHome))
+	before, err := os.ReadFile(busyPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	attempt := exec.Command(binary, "import", archivePath, "--cwd", replacementCWD, "--replace")
+	attempt.Env = cleanEnvironment(busyHome, codexPath)
+	if output, err := attempt.CombinedOutput(); err == nil || !bytes.Contains(output, []byte("session is open in Codex")) {
+		t.Fatalf("import into an open session: %v: %s", err, output)
+	}
+	after, err := os.ReadFile(busyPath)
+	if err != nil || !bytes.Equal(before, after) {
+		t.Fatalf("refused import changed the open session: %v", err)
+	}
 	openSession.Close()
 	assertOutput(t, run(t, binary, codexPath, targetHome, nil, true,
 		"import", archivePath, "--cwd", targetCWD), "updated")

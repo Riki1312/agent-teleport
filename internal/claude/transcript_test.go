@@ -164,7 +164,8 @@ func TestLayoutForVersions(t *testing.T) {
 		{version: "2.1.316", supported: false},
 		{version: "2.1.317", supported: true, tested: true},
 		{version: "2.1.322", supported: true, tested: true},
-		{version: "2.1.323", supported: true, tested: false},
+		{version: "2.1.323", supported: true, tested: true},
+		{version: "2.1.324", supported: true, tested: false},
 	} {
 		// when
 		_, tested, err := layoutFor(test.version)
@@ -180,15 +181,54 @@ func lines(records ...string) []byte {
 	return []byte(strings.Join(records, "\n") + "\n")
 }
 
-func TestLastPromptOffsetIncludesTheQueueRecordsOfThePrompt(t *testing.T) {
-	first := string(lines(`{"type":"user","message":{"role":"user","content":"one"}}`, `{"type":"assistant","message":{"role":"assistant","content":[]}}`))
+func TestCompletedTranscriptEndIncludesTheQueueRecordsOfThePrompt(t *testing.T) {
+	first := string(lines(`{"type":"user","message":{"role":"user","content":"one"}}`, `{"type":"assistant","message":{"role":"assistant","content":[],"stop_reason":"end_turn"}}`))
 	turn := string(lines(`{"type":"queue-operation","operation":"enqueue","content":"two"}`, `{"type":"queue-operation","operation":"dequeue"}`, `{"type":"user","message":{"role":"user","content":"two"}}`, `{"type":"user","message":{"role":"user","content":[{"type":"tool_result"}]}}`))
 
 	// when
-	offset := lastPromptOffset([]byte(first + turn))
+	offset := completedTranscriptEnd([]byte(first + turn))
 
 	// then
 	if offset != len(first) {
-		t.Fatalf("lastPromptOffset() = %d, want %d", offset, len(first))
+		t.Fatalf("completedTranscriptEnd() = %d, want %d", offset, len(first))
+	}
+}
+
+func TestCompletedTranscriptEndKeepsCompletedHistoryBeforeBufferedPrompt(t *testing.T) {
+	completed := lines(`{"type":"user","message":{"content":"completed prompt"}}`, `{"type":"assistant","message":{"stop_reason":"end_turn"}}`, `{"type":"last-prompt"}`)
+	queue := `{"type":"queue-operation","operation":"enqueue","content":"next prompt"}`
+	prompt := `{"type":"user","message":{"content":"next prompt"}}`
+	tool := `{"type":"assistant","message":{"stop_reason":"tool_use"}}`
+	metadata := `{"type":"last-prompt"}`
+	for _, test := range []struct {
+		name    string
+		records []string
+	}{
+		{name: "buffered prompt"},
+		{name: "queued prompt", records: []string{queue}},
+		{name: "queue followed by metadata", records: []string{queue, metadata}},
+		{name: "metadata between queue and prompt", records: []string{queue, metadata, prompt, tool}},
+		{name: "recorded prompt and tool", records: []string{queue, prompt, tool}},
+		{name: "queued follow-up during tool", records: []string{prompt, tool, queue}},
+		{name: "earlier turn finishes with queued follow-up", records: []string{prompt, tool, queue, `{"type":"assistant","message":{"stop_reason":"end_turn"}}`}},
+		{name: "follow-up starts after earlier turn", records: []string{prompt, tool, queue, `{"type":"assistant","message":{"stop_reason":"end_turn"}}`, prompt, tool}},
+		{name: "subagent completion", records: []string{prompt, `{"type":"assistant","isSidechain":true,"message":{"stop_reason":"end_turn"}}`}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			data := append([]byte{}, completed...)
+			if len(test.records) > 0 {
+				data = append(data, lines(test.records...)...)
+			}
+			if got := completedTranscriptEnd(data); got != len(completed) {
+				t.Fatalf("offset = %d, want completed prefix %d", got, len(completed))
+			}
+		})
+	}
+}
+
+func TestCompletedTranscriptEndKeepsFinishedQueuedFollowUp(t *testing.T) {
+	data := lines(`{"type":"user","message":{"content":"first"}}`, `{"type":"assistant","message":{"stop_reason":"tool_use"}}`, `{"type":"queue-operation","operation":"enqueue","content":"follow up"}`, `{"type":"assistant","message":{"stop_reason":"end_turn"}}`, `{"type":"user","message":{"content":"follow up"}}`, `{"type":"assistant","message":{"stop_reason":"end_turn"}}`)
+	if got := completedTranscriptEnd(data); got != len(data) {
+		t.Fatalf("end = %d, want full completed transcript %d", got, len(data))
 	}
 }

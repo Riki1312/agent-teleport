@@ -158,7 +158,7 @@ An archived Codex session therefore holds every object of the root thread and of
 3. Move the workspace in every file, as described in the fidelity model. This covers plain paths, paths below the workspace, `file://` URIs, paths embedded in generated text, and tool calls and outputs. Every reference is moved to the same record boundary of the rewritten object.
 4. Recover writes an earlier import left unfinished.
 5. Plan every thread before changing anything. Codex's stores are the source of truth, because Codex lists neither archived threads nor forks without turns. A local thread is compared segment by segment, where a segment is the original rollout or the records a snapshot holds after its revert header, and the update rule decides whether to keep it, append the incoming records, or replay missing reverts. Ancestors outside the session are reused when they contain the referenced prefix and are never modified; Codex also refuses to delete a thread that forks reference.
-6. Execute the plan in archive order. A new original rollout is written to a stage file under its native name and hard-linked into place, so Codex never sees a partial file and an existing one is never overwritten. A revert is replayed through App Server `thread/revert` on the same turn, so that Codex writes its own snapshot and records it as the thread's current history; the archived snapshot's later records are then appended to it. References to replayed snapshots are pointed at Codex's new objects.
+6. Execute the plan in archive order. A new original rollout is written to a stage file under its native name and hard-linked into place, so Codex never sees a partial file and an existing one is never overwritten. A revert is replayed through App Server `thread/revert` on the same turn, so that Codex writes its own snapshot and records it as the thread's current history; its generated metadata is retained, and the archived settings and continuation are restored together in one atomic replacement under the thread writer lock. Codex may generate one or two settings records during replay. Import checks the generated header, thread identity, workspace, history reference, and ordinal before replacing those fresh records; unexpected records or a concurrent writer stop the import. References to replayed snapshots are pointed at Codex's new objects.
 7. Let App Server scan and repair its state, then verify. A session of one self-contained thread must appear with the target workspace in the scan, the state database, and `thread/read`. Otherwise the session is loaded in order in a separate App Server with goals, hooks, plugins, shell snapshots, and local automations disabled, because Codex builds a fork's turns only after loading its ancestors and loads sub-agents through their parent: the root thread must replay every turn, and every sub-agent thread must be readable in its workspace.
 
 A dry run performs every check up to the plan and never starts App Server.
@@ -181,7 +181,7 @@ Any failure or interruption before the commit point restores the old rollout, de
 
 ### Supported versions
 
-Each rollout layout covers a range of Codex versions: its turn boundary events, its workspace metadata events, and the size of its revert header. The current layout starts at Codex 0.165.0 and is tested through 0.167.1. Older versions fail closed. Newer versions are accepted with a `doctor` warning, because Codex releases every few days, while structural validation still rejects rollouts it does not recognize. CI runs the two-home test against every tested version, and raising the tested range requires it to pass against the new release. Older layouts are removed rather than kept.
+Each rollout layout covers a range of Codex versions: its turn boundary events, its workspace metadata events, and the size of its revert header. The current layout starts at Codex 0.165.0 and is tested through 0.169.0. Older versions fail closed. Newer versions are accepted with a `doctor` warning, because Codex releases every few days, while structural validation still rejects rollouts it does not recognize. CI runs the two-home test against every tested version, and raising the tested range requires it to pass against the new release. Older layouts are removed rather than kept.
 
 ## Claude Code adapter
 
@@ -193,7 +193,7 @@ Claude Code has no index and no server: it resumes a session by finding its tran
 
 1. List sessions from the transcripts of the workspace's project folder, or of every folder with `--all`, reading only complete records. A session's title is its custom title, else its generated title, else its first prompt.
 2. Read the complete records of the transcript and the sub-agent transcripts, and every other file of the session folder, failing on a file that is not part of the known layout. Every record must belong to the session, and every sub-agent record to its agent.
-3. When a running Claude Code process reports the session as anything but idle, cut the transcript before the queue records and prompt of its last turn, and leave out the sub-agents that turn started.
+3. When a running Claude Code process reports the session as anything but idle, cut the transcript before the queue records and prompt of its unfinished turn, preserving a terminal `end_turn` assistant response if the next active prompt has not been flushed yet, and leave out sub-agents started after the cutoff. If a follow-up was queued during a running turn, the cutoff precedes that turn until the follow-up completes, so the archive remains a completed prefix without interleaved unfinished queue records.
 4. Build the archive with the payload paths relative to the project folder. File history backups are project files and are not exported.
 
 ### Import
@@ -206,7 +206,7 @@ Claude Code has no index and no server: it resumes a session by finding its tran
 
 ### Supported versions
 
-The current layout starts at Claude Code 2.1.317 and is tested through 2.1.322, with the same rules as Codex: older versions fail closed, newer versions are accepted with a `doctor` warning, and structural validation rejects unknown files.
+The current layout starts at Claude Code 2.1.317 and is tested through 2.1.323, with the same rules as Codex: older versions fail closed, newer versions are accepted with a `doctor` warning, and structural validation rejects unknown files.
 
 ## Repository sessions
 
