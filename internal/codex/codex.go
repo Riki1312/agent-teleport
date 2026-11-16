@@ -28,16 +28,10 @@ const Provider = "openai-codex"
 
 // Adapter registers Codex with the command-line interface.
 var Adapter = provider.Adapter{
-	ID:      Provider,
-	Name:    "Codex",
-	Command: "codex",
-	Open: func(ctx context.Context) (provider.Store, error) {
-		store, err := Open(ctx)
-		if err != nil {
-			return nil, err
-		}
-		return store, nil
-	},
+	ID:              Provider,
+	Name:            "Codex",
+	Command:         "codex",
+	Open:            Open,
 	Diagnose:        Diagnose,
 	ValidateArchive: ValidateArchive,
 	Relocate:        Relocate,
@@ -72,16 +66,18 @@ var allSources = []string{"cli", "vscode", "exec", "appServer", "subAgent", "sub
 // Store is the local Codex installation. It starts App Server on first use and
 // keeps it running until Close.
 type Store struct {
-	ctx     context.Context
-	binary  string
-	home    string
-	version string
-	layout  layout
-	client  *appserver.Client
+	ctx       context.Context
+	binary    string
+	home      string
+	version   string
+	layout    layout
+	client    *appserver.Client
+	runtime   []string
+	isolation *isolatedImport
 }
 
 // Open detects the local Codex installation and requires a supported version.
-func Open(ctx context.Context) (*Store, error) {
+func Open(ctx context.Context) (provider.Store, error) {
 	home, err := codexHome()
 	if err != nil {
 		return nil, err
@@ -95,7 +91,11 @@ func Open(ctx context.Context) (*Store, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &Store{ctx: ctx, binary: binary, home: home, version: version, layout: layout}, nil
+	store := &Store{ctx: ctx, binary: binary, home: home, version: version, layout: layout}
+	if err := store.loadIsolation(); err != nil {
+		return nil, err
+	}
+	return &managedStore{primary: store}, nil
 }
 
 // Close stops App Server if the store started it.
@@ -196,10 +196,18 @@ func (s *Store) Export(id string, createdAt time.Time) (archive.Archive, error) 
 
 // ResumeCommand returns the Codex command that continues sessionID in
 // workspace.
-func (s *Store) ResumeCommand(sessionID, workspace string) *exec.Cmd {
-	command := exec.CommandContext(s.ctx, s.binary, "resume", sessionID)
+func (s *Store) ResumeCommand(sessionID, workspace string) (*exec.Cmd, error) {
+	if err := s.validateIsolation(workspace); err != nil {
+		return nil, err
+	}
+	arguments := append([]string{}, s.runtime...)
+	if s.isolation != nil {
+		arguments = append(arguments, "--no-daemon")
+	}
+	command := exec.CommandContext(s.ctx, s.binary, append(arguments, "resume", sessionID)...)
 	command.Dir = workspace
-	return command
+	command.Env = codexEnvironment(s.home)
+	return command, nil
 }
 
 // ValidateArchive checks that a Codex archive is internally consistent for the
@@ -225,7 +233,12 @@ func Diagnose(ctx context.Context) provider.Diagnosis {
 	_, tested, layoutErr := layoutFor(diagnosis.Version)
 	diagnosis.Supported = layoutErr == nil
 	diagnosis.Tested = tested
-	client, err := appserver.Start(ctx, binary, diagnosis.Home)
+	native := &Store{ctx: ctx, binary: binary, home: diagnosis.Home, version: diagnosis.Version}
+	err := native.loadIsolation()
+	var client *appserver.Client
+	if err == nil {
+		client, err = native.startAppServer()
+	}
 	if err == nil {
 		_, err = client.List(appserver.ListQuery{StateOnly: true})
 		client.Close()
@@ -240,7 +253,7 @@ func (s *Store) appServer() (*appserver.Client, error) {
 	if s.client != nil {
 		return s.client, nil
 	}
-	client, err := appserver.Start(s.ctx, s.binary, s.home)
+	client, err := s.startAppServer()
 	if err != nil {
 		return nil, err
 	}
@@ -354,4 +367,14 @@ func detectVersion(ctx context.Context, binary string) (string, error) {
 		return "", fmt.Errorf("unexpected Codex version output %q", strings.TrimSpace(string(output)))
 	}
 	return fields[1], nil
+}
+
+// startAppServer applies the same storage overrides for import and resume.
+func (s *Store) startAppServer(arguments ...string) (*appserver.Client, error) {
+	if s.isolation != nil {
+		if err := s.validateIsolation(s.isolation.Workspace); err != nil {
+			return nil, err
+		}
+	}
+	return appserver.Start(s.ctx, s.binary, s.home, append(append([]string{}, s.runtime...), arguments...)...)
 }

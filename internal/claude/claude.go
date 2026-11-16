@@ -206,10 +206,10 @@ func (s *Store) Export(id string, createdAt time.Time) (archive.Archive, error) 
 
 // ResumeCommand returns the Claude Code command that continues sessionID in
 // workspace.
-func (s *Store) ResumeCommand(sessionID, workspace string) *exec.Cmd {
+func (s *Store) ResumeCommand(sessionID, workspace string) (*exec.Cmd, error) {
 	command := exec.CommandContext(s.ctx, s.binary, "--resume", sessionID)
 	command.Dir = workspace
-	return command
+	return command, nil
 }
 
 // ValidateArchive checks that a Claude Code archive is internally consistent

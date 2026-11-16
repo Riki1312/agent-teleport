@@ -30,11 +30,12 @@ A transfer is lossless with respect to the recorded provider event stream: an ar
 ```text
 agent-teleport list    [--all] [--json]
 agent-teleport export  [SESSION | --last] [--all] [-o PATH|-]
-agent-teleport import  (ARCHIVE | -) [--cwd PATH] [--replace] [--dry-run] [--resume]
+agent-teleport import  (ARCHIVE | -) [--cwd PATH] [--replace] [--isolated] [--dry-run] [--resume]
+agent-teleport resume  SESSION
 agent-teleport inspect (ARCHIVE | -) [--json]
 agent-teleport save    [SESSION | --last] [--all] [--name NAME] [--allow-secrets]
-agent-teleport open    [NAME] [--replace] [--dry-run] [--resume]
-agent-teleport status  [--json]
+agent-teleport open    [NAME] [--replace] [--isolated] [--dry-run] [--resume]
+agent-teleport status  [--isolated] [--json]
 agent-teleport doctor  [--json]
 agent-teleport completion (bash | zsh)
 ```
@@ -182,6 +183,18 @@ Any failure or interruption before the commit point restores the old rollout, de
 ### Supported versions
 
 Each rollout layout covers a range of Codex versions: its turn boundary events, its workspace metadata events, and the size of its revert header. The current layout starts at Codex 0.165.0 and is tested through 0.169.0. Older versions fail closed. Newer versions are accepted with a `doctor` warning, because Codex releases every few days, while structural validation still rejects rollouts it does not recognize. CI runs the two-home test against every tested version, and raising the tested range requires it to pass against the new release. Older layouts are removed rather than kept.
+
+### Managed isolated imports
+
+Codex `import --isolated` and `open --isolated` select a persistent separate history store. A SHA-256 key of provider, native root session ID, and canonical target workspace identifies `<normal-codex-home>/agent-teleport/imports/<key>/codex/`. A versioned private `.agent-teleport.json` receipt records the normal home, native session identity, workspace, and whether native import verification completed. Archive contents and checksums do not determine this identity, so later archives find the same copy.
+
+A 16-hex-digit `iso-` reference selects the receipt; prefix collisions are rejected. A reference can append `:<native-session-id>` for another session, such as a native fork, within that history store. `list` includes ready imported roots alongside normal sessions, retaining native IDs in JSON and adding a `reference` field for isolated copies. Selection, `resume`, `export`, and `save` use the reference. Inside an isolated agent, native IDs continue to resolve in its current home. `status --isolated` compares saved sessions to their deterministic isolated destinations.
+
+The managed Codex adapter routes references to the existing native store implementation. It validates and relocates the archive once before creating directories, recovers interrupted native writes before planning mutations, serializes imports into one destination, and marks a receipt ready only after native verification. A dry run creates no managed directories or writer locks. Native identifiers, archive formats, and ancestor references are preserved; isolated copies use the same conflict and update rules as normal imports.
+
+Known runtime files and directories are linked to the normal home: configuration and profiles, global instructions, skills, plugins, rules, hooks, file-backed CLI login, and file-backed MCP credentials. Existing local runtime resources are preserved; unexpected links fail closed. Credentials are never copied from the archive. Native keyring namespaces remain home-specific and can require another sign-in. A receipt makes subprocesses recognize their isolated home. Import loaders and resume commands explicitly override `sqlite_home` and `log_dir`, and interactive resume disables shared-daemon reuse. Before database initialization or resume, native `--print-startup-config` must confirm that managed requirements do not force shared SQLite or log storage. Missing reports and incompatible requirements stop the operation; no managed requirement is bypassed.
+
+Settings and recorded continuation remain separate concerns: history and databases are isolated, while writes to shared runtime files may affect normal Codex configuration or login. Isolated sessions are absent from the normal native resume picker. The CLI prints `agent-teleport resume <reference>` so it can select the right history and workspace without exposing home-management commands.
 
 ## Claude Code adapter
 

@@ -15,6 +15,7 @@ var commandUsages = map[string]string{
 	"list":       listUsage,
 	"export":     exportUsage,
 	"import":     importUsage,
+	"resume":     resumeUsage,
 	"inspect":    inspectUsage,
 	"save":       saveUsage,
 	"open":       openUsage,
@@ -98,7 +99,7 @@ func (a *App) candidates(ctx context.Context, words []string) []string {
 		return names
 	}
 	switch command {
-	case "export", "save":
+	case "export", "save", "resume":
 		return a.sessionCandidates(ctx, slices.Contains(words, "--all"))
 	case "open":
 		return a.savedCandidates(ctx)
@@ -125,7 +126,7 @@ func (a *App) sessionCandidates(ctx context.Context, includeAll bool) []string {
 	}
 	candidates := make([]string, 0, len(sessions))
 	for _, session := range sessions {
-		candidates = append(candidates, session.ID+"\t"+shorten(session.Title))
+		candidates = append(candidates, session.Selector()+"\t"+shorten(session.Title))
 	}
 	return candidates
 }

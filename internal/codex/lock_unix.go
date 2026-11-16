@@ -14,11 +14,33 @@ import (
 // while a process has the thread loaded. It fails with errSessionOpen instead
 // of waiting.
 func lockThread(home, thread string) (func(), error) {
-	directory := filepath.Join(home, "thread-writer-locks")
-	if err := os.MkdirAll(directory, 0o755); err != nil {
-		return nil, fmt.Errorf("create Codex lock directory: %w", err)
+	return threadLock(home, thread, true)
+}
+
+func checkThreadClosed(home, thread string) error {
+	unlock, err := threadLock(home, thread, false)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil
 	}
-	file, err := os.OpenFile(filepath.Join(directory, thread+".lock"), os.O_RDWR|os.O_CREATE, 0o644)
+	if err != nil {
+		return err
+	}
+	unlock()
+	return nil
+}
+
+func threadLock(home, thread string, create bool) (func(), error) {
+	directory := filepath.Join(home, "thread-writer-locks")
+	if create {
+		if err := os.MkdirAll(directory, 0o755); err != nil {
+			return nil, fmt.Errorf("create Codex lock directory: %w", err)
+		}
+	}
+	flags := os.O_RDWR
+	if create {
+		flags |= os.O_CREATE
+	}
+	file, err := os.OpenFile(filepath.Join(directory, thread+".lock"), flags, 0o644)
 	if err != nil {
 		return nil, fmt.Errorf("open Codex thread lock: %w", err)
 	}

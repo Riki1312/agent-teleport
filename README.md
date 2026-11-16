@@ -80,6 +80,22 @@ agent-teleport inspect session.teleport    # validates without changing anything
 
 Importing is safe to repeat: a longer archive updates the local session, a longer local one is kept, identical copies are left alone, and a diverged copy is replaced only with `--replace`. A session that is open in its agent is never changed.
 
+### Keep conflicting Codex histories
+
+When a Codex ancestor already exists locally with different history or workspace paths, import a separate copy:
+
+```sh
+agent-teleport import session.teleport --isolated --resume
+# For a session saved in the repository:
+agent-teleport open fix-login --isolated
+```
+
+This preserves native session IDs and existing histories. Isolated imports live privately under the local Codex home, outside the repository. Repeating an isolated import for the same session and target workspace updates the same copy using the usual fast-forward rule. `--dry-run` previews it without creating storage.
+
+`list` includes an `iso-…` reference for each managed import. Use that reference with `resume`, `export`, or `save`, for example `agent-teleport resume iso-0123456789abcdef`. `status --isolated` compares saved repository sessions with their isolated copies. Native forks created within an isolated home can also be selected by their printed reference. Archives keep the original provider identity; local receipts and routing references are not added to their manifests.
+
+Isolation covers session histories and state databases. Configuration, profiles, global instructions, skills, plugins, rules, hooks, and existing file-backed login are shared by reference with the normal Codex home. Changes to shared settings or login affect that normal setup too. Native keyring namespaces are home-specific, so keyring-backed login or MCP integrations can require a separate sign-in. An isolated import does not appear in the normal Codex resume picker; return through `agent-teleport resume`.
+
 ## What travels, and what does not
 
 An archive or a saved session holds the recorded history and nothing else. Project files, uncommitted changes, credentials, running processes, and tool state stay where they were, so check out the same code before resuming. Paths outside the workspace, such as your home directory, stay as recorded.

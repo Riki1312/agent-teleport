@@ -110,10 +110,5 @@ func recoverAppend(home, thread, path string) error {
 
 // requireClosed fails when a Codex process has thread loaded.
 func requireClosed(home, thread string) error {
-	unlock, err := lockThread(home, thread)
-	if err != nil {
-		return err
-	}
-	unlock()
-	return nil
+	return checkThreadClosed(home, thread)
 }

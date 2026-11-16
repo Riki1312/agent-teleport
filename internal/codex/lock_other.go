@@ -9,3 +9,8 @@ import "errors"
 func lockThread(string, string) (func(), error) {
 	return nil, errors.New("updating Codex sessions is supported only on Linux and macOS")
 }
+
+func checkThreadClosed(home, thread string) error {
+	_, err := lockThread(home, thread)
+	return err
+}

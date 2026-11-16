@@ -8,6 +8,7 @@ Usage:
 Commands:
   list        List local sessions for this directory
   export      Write a session to a .teleport archive or stdout
+  resume      Resume a local or isolated session
   import      Add a session from a .teleport archive or stdin
   inspect     Check an archive without changing anything
   save        Save a session in this Git repository
@@ -72,7 +73,7 @@ Examples:
 const importUsage = `Add a session from a .teleport archive, or from stdin with -.
 
 Usage:
-  agent-teleport import (ARCHIVE | -) [--cwd PATH] [--replace] [--dry-run] [--resume]
+  agent-teleport import (ARCHIVE | -) [--cwd PATH] [--replace] [--isolated] [--dry-run] [--resume]
 
 The session is mapped to the current directory unless --cwd is given. When
 the session already exists, a copy that extends the other wins: a longer
@@ -83,6 +84,7 @@ never changed; close them first.
 Options:
   --cwd PATH   Map the session to PATH instead of the current directory
   --replace    Overwrite a diverged local copy, or one in another workspace
+  --isolated   Keep this Codex history separate from existing local sessions
   --dry-run    Check the import without changing anything
   --resume     Resume the session after importing it
 `
@@ -136,7 +138,7 @@ Options:
 const openUsage = `Add a session saved in this repository to its agent.
 
 Usage:
-  agent-teleport open [NAME] [--replace] [--dry-run] [--resume]
+  agent-teleport open [NAME] [--replace] [--isolated] [--dry-run] [--resume]
 
 The session is mapped to this checkout and follows the same rule as
 import: a newer saved copy updates the local session, and a newer local
@@ -146,6 +148,7 @@ in the chat, and --resume is refused.
 
 Options:
   --replace    Overwrite a diverged local copy, or one in another workspace
+  --isolated   Keep this Codex history separate from existing local sessions
   --dry-run    Check the open without changing anything
   --resume     Resume the session after opening it
 `
@@ -153,11 +156,22 @@ Options:
 const statusUsage = `Compare the sessions saved in this repository with their local copies.
 
 Usage:
-  agent-teleport status [--json]
+  agent-teleport status [--isolated] [--json]
 
 Each saved session is in sync, local ahead (save it), repository ahead
 (open it), diverged, or not opened.
 
 Options:
-  --json   Print machine-readable JSON
+  --isolated   Compare with managed isolated Codex copies
+  --json       Print machine-readable JSON
+`
+
+const resumeUsage = `Resume a local session or a managed isolated import.
+
+Usage:
+  agent-teleport resume SESSION
+
+Use a session selector from list, or the iso- reference printed by an
+isolated import. The agent starts in the recorded workspace with the
+correct history store. Inside a running agent, use another terminal.
 `

@@ -27,6 +27,14 @@ func (s *Store) Import(request provider.ImportRequest) (provider.ImportResult, e
 	if err != nil {
 		return provider.ImportResult{}, err
 	}
+	return s.importSession(session, request)
+}
+
+// importSession applies a validated, relocated session to native storage.
+// Managed imports can prepare their private destination without rewriting
+// large archive payloads twice or bypassing interrupted-write recovery.
+func (s *Store) importSession(session codexSession, request provider.ImportRequest) (provider.ImportResult, error) {
+	var err error
 	var client *appserver.Client
 	if !request.DryRun {
 		if client, err = s.appServer(); err != nil {
@@ -213,6 +221,9 @@ func (s *Store) planThread(session codexSession, thread string, replace bool, pl
 	}
 	switch {
 	case len(stored.archived) > 0:
+		if !member {
+			return "", fmt.Errorf("ancestor thread %s is archived; use --isolated to preserve both histories", thread)
+		}
 		return "", fmt.Errorf("thread %s is archived at %s; restore or delete it in Codex before importing it", thread, strings.Join(stored.archived, ", "))
 	case len(stored.pending) > 0 || len(stored.appending) > 0:
 		return "", fmt.Errorf("thread %s has an interrupted write; rerun without --dry-run to recover it", thread)
@@ -275,7 +286,7 @@ func (s *Store) planThread(session codexSession, thread string, replace bool, pl
 		keepLast()
 		return provider.Unchanged, nil
 	case !member:
-		return "", fmt.Errorf("ancestor thread %s differs locally from the history in the archive", thread)
+		return "", fmt.Errorf("ancestor thread %s differs locally from the history in the archive; use --isolated to preserve both histories", thread)
 	case len(incomingSegments) == len(localSegments) && relation == historiesEqual:
 		keepLast()
 		return provider.Unchanged, nil
@@ -447,7 +458,7 @@ func (s *Store) replayRevert(session codexSession, snapshot rolloutFile, objects
 	if err != nil {
 		return localObject{}, err
 	}
-	loader, err := appserver.Start(s.ctx, s.binary, s.home, safeLoadArguments...)
+	loader, err := s.startAppServer(safeLoadArguments...)
 	if err != nil {
 		return localObject{}, fmt.Errorf("start Codex App Server to replay a revert: %w", err)
 	}
@@ -700,7 +711,7 @@ func (s *Store) verifyImportedSession(client *appserver.Client, session codexSes
 	if _, err := client.List(appserver.ListQuery{SourceKinds: allSources}); err != nil {
 		return err
 	}
-	loader, err := appserver.Start(s.ctx, s.binary, s.home, safeLoadArguments...)
+	loader, err := s.startAppServer(safeLoadArguments...)
 	if err != nil {
 		return fmt.Errorf("start Codex App Server to load the session: %w", err)
 	}

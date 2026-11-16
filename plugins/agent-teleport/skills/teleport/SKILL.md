@@ -26,6 +26,12 @@ When the save reports that the saved copy is newer, or that the copies have dive
 - `agent-teleport status` lists each saved session as in sync, local ahead, repository ahead, diverged, or not opened.
 - `agent-teleport open NAME` adds a saved session to the agent on this machine. It prints how to switch to it in this chat, such as typing `/resume` with the session ID, and the command that resumes it in a new terminal; relay both. Only the user can switch sessions, so never pass `--resume`.
 
+## Preserve a conflicting Codex ancestor
+
+When import or open reports a conflicting or archived Codex ancestor, explain that `--isolated` keeps a separate local history while preserving existing sessions. If the user wants both copies, run `agent-teleport import FILE --isolated` or `agent-teleport open NAME --isolated`. Relay the returned `agent-teleport resume iso-…` command for another terminal; the normal native resume picker cannot see that copy. Never run `resume` or `--resume` inside this agent.
+
+Use the local `iso-…` reference with `export` or `save` when selecting that copy from outside its running agent. Inside the isolated agent, normal current-session selection works. `status --isolated` compares repository sessions with isolated copies. Runtime settings and file login are shared with the normal Codex setup; native keyring-backed login can require a separate sign-in.
+
 ## Export to a file
 
 `agent-teleport export -o FILE.teleport` writes this session to an archive that `agent-teleport import` reads on another machine.

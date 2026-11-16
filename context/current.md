@@ -10,7 +10,7 @@
 
 ## Repository state
 
-- Commands: `list`, `export`, `import`, `inspect`, `save`, `open`, `status`, `doctor`, `completion`, with per-command help and `--version`. Selectors match ID prefixes, exact titles, and parts of titles; terminals get numbered prompts.
+- Commands: `list`, `export`, `import`, `inspect`, `save`, `open`, `status`, `doctor`, `completion`, `resume`, with per-command help and `--version`. Selectors match ID prefixes, exact titles, and parts of titles; terminals get numbered prompts.
 - The archive manifest lists every payload file with its size and SHA-256 digest.
 - Import applies the fast-forward update rule. `--replace` uses the recoverable rollback transaction for single-thread Codex sessions and atomic renames for Claude Code sessions; other diverged Codex sessions must be deleted in Codex first.
 - Moving a session rewrites every boundary-delimited mention of the workspace in every record and saved tool output and preserves all other bytes; moving there and back is the identity on the native fixtures.
@@ -27,7 +27,7 @@
 - The [compatibility work record](sessions/2026-11-13.md) owns validation of current and minimum-supported agents.
 - Claude in-session export keeps the latest completed assistant turn when the next active prompt has not yet been flushed, and excludes queued or recorded unfinished prompts. The Claude repository E2E reproduces this boundary.
 - Codex can append settings on resume and emit two settings records during revert. Import preserves archived settings and ordinals by restoring the fresh snapshot in one atomic write under the thread writer lock. Unit coverage rejects unknown extra records, changed history boundaries, and concurrent writers; the native transfer test keeps its busy-session probe in a separate home because resume can legitimately extend history.
-- A workspace-remapped fork cannot reuse an ancestor stored under the same identity with different paths. Preserve both histories by importing into an isolated Codex home rather than changing ancestor IDs or overwriting the local copy.
+- Conflicting Codex ancestors can be preserved with managed `import --isolated` or `open --isolated`. Local `iso-` references route resume, export, and save; `status --isolated` compares the selected copies. The [isolated-import handoff](sessions/2026-11-15.md) records the implementation and runtime-sharing boundaries.
 
 ## Next work
 

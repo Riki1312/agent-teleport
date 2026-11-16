@@ -63,7 +63,7 @@ type Store interface {
 	Import(request ImportRequest) (ImportResult, error)
 	// ResumeCommand returns the provider command that continues sessionID in
 	// workspace.
-	ResumeCommand(sessionID, workspace string) *exec.Cmd
+	ResumeCommand(sessionID, workspace string) (*exec.Cmd, error)
 	// Close releases any process the store started.
 	Close()
 }
@@ -73,11 +73,21 @@ type Session struct {
 	// Provider is the ID of the provider that owns the session.
 	Provider string
 	ID       string
+	// Reference selects a particular local copy when ID alone is insufficient.
+	Reference string
 	// Title is the session's name, or the provider's preview of its first
 	// message.
 	Title     string
 	Workspace string
 	UpdatedAt time.Time
+}
+
+// Selector returns the unambiguous local reference, or the native session ID.
+func (s Session) Selector() string {
+	if s.Reference != "" {
+		return s.Reference
+	}
+	return s.ID
 }
 
 // ImportRequest describes one archive import.
@@ -89,6 +99,8 @@ type ImportRequest struct {
 	// archive, or that belongs to another workspace.
 	Replace bool
 	DryRun  bool
+	// Isolated imports into a managed separate history store, if supported.
+	Isolated bool
 }
 
 // ImportOutcome is what an import did, or would do in a dry run.
@@ -110,6 +122,8 @@ const (
 // ImportResult reports the session an import produced.
 type ImportResult struct {
 	SessionID string
+	// Reference selects the imported copy when it uses a separate history store.
+	Reference string
 	Workspace string
 	Outcome   ImportOutcome
 }

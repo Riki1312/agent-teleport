@@ -33,7 +33,7 @@ func TestEveryDocumentedOptionIsAccepted(t *testing.T) {
 func TestCandidates(t *testing.T) {
 	app := &App{Stdout: &bytes.Buffer{}, Stderr: &bytes.Buffer{}}
 	for words, want := range map[string][]string{
-		"ex":                {"completion", "doctor", "export", "import", "inspect", "list", "open", "save", "status"},
+		"ex":                {"completion", "doctor", "export", "import", "inspect", "list", "open", "resume", "save", "status"},
 		"export --":         {"--last", "--all", "--output"},
 		"export -o ":        {filesCandidate},
 		"import --cwd ":     {filesCandidate},
@@ -41,7 +41,7 @@ func TestCandidates(t *testing.T) {
 		"import ":           {filesCandidate},
 		"completion ":       {"bash", "zsh"},
 		"unknown ":          nil,
-		"status --":         {"--json"},
+		"status --":         {"--isolated", "--json"},
 		"save --allow-secr": {"--last", "--all", "--name", "--allow-secrets"},
 	} {
 		// when

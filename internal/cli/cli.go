@@ -70,6 +70,8 @@ func (a *App) Run(ctx context.Context, args []string) error {
 		return a.list(ctx, args[1:])
 	case "export":
 		return a.export(ctx, args[1:])
+	case "resume":
+		return a.resume(ctx, args[1:])
 	case "inspect":
 		return a.inspect(ctx, args[1:])
 	case "import":
@@ -107,6 +109,7 @@ func isSessionID(selector string) bool {
 type sessionEntry struct {
 	Provider  string    `json:"provider"`
 	ID        string    `json:"id"`
+	Reference string    `json:"reference,omitempty"`
 	Title     string    `json:"title"`
 	Workspace string    `json:"workspace"`
 	UpdatedAt time.Time `json:"updated_at"`
@@ -135,6 +138,7 @@ func (a *App) list(ctx context.Context, args []string) error {
 			entries = append(entries, sessionEntry{
 				Provider:  session.Provider,
 				ID:        session.ID,
+				Reference: session.Reference,
 				Title:     session.Title,
 				Workspace: session.Workspace,
 				UpdatedAt: session.UpdatedAt,
@@ -156,7 +160,7 @@ func (a *App) list(ctx context.Context, args []string) error {
 	}
 	now := a.Now()
 	for _, session := range sessions {
-		columns := []string{relativeTime(now, session.UpdatedAt), adapterFor(session.Provider).Command, shortID(session.ID)}
+		columns := []string{relativeTime(now, session.UpdatedAt), adapterFor(session.Provider).Command, displaySessionID(session)}
 		if *includeAll {
 			columns = append(columns, session.Workspace)
 		}
@@ -191,7 +195,7 @@ func (a *App) export(ctx context.Context, args []string) error {
 	if err != nil {
 		return err
 	}
-	exported, err := stores[session.Provider].Export(session.ID, a.Now())
+	exported, err := stores[session.Provider].Export(session.Selector(), a.Now())
 	if err != nil {
 		return err
 	}
@@ -284,6 +288,7 @@ func (a *App) importArchive(ctx context.Context, args []string) error {
 	replace := set.Bool("replace", false, "")
 	dryRun := set.Bool("dry-run", false, "")
 	resume := set.Bool("resume", false, "")
+	isolated := set.Bool("isolated", false, "")
 	positional, err := a.parse(set, args, importUsage)
 	if err != nil || len(positional) != 1 {
 		return usageOrHelp(err, "import requires exactly one archive path or -")
@@ -311,7 +316,7 @@ func (a *App) importArchive(ctx context.Context, args []string) error {
 		return err
 	}
 	defer store.Close()
-	return a.importInto(adapter, store, provider.ImportRequest{Archive: source, Workspace: workspace, Replace: *replace, DryRun: *dryRun}, *resume)
+	return a.importInto(adapter, store, provider.ImportRequest{Archive: source, Workspace: workspace, Replace: *replace, DryRun: *dryRun, Isolated: *isolated}, *resume)
 }
 
 // resumeAllowed rejects --resume where it cannot work: in a dry run, and
@@ -321,7 +326,7 @@ func resumeAllowed(dryRun, resume bool) error {
 	case dryRun && resume:
 		return &UsageError{Message: "--dry-run and --resume cannot be used together"}
 	case resume && insideAgent():
-		return &UsageError{Message: "--resume cannot run inside Codex or Claude Code; switch to the session with the agent's /resume command instead"}
+		return &UsageError{Message: "--resume cannot run inside Codex or Claude Code; use /resume for a normal local copy, or run the printed agent-teleport resume command in another terminal"}
 	}
 	return nil
 }
@@ -339,11 +344,22 @@ func (a *App) importInto(adapter provider.Adapter, store provider.Store, request
 	if request.DryRun {
 		return nil
 	}
-	resumeCommand := store.ResumeCommand(result.SessionID, result.Workspace)
-	if _, err := fmt.Fprintf(a.Stdout, "resume with: %s\n", displayCommand(resumeCommand)); err != nil {
+	reference := result.SessionID
+	if result.Reference != "" {
+		reference = result.Reference
+	}
+	resumeCommand, err := store.ResumeCommand(reference, result.Workspace)
+	if err != nil {
 		return err
 	}
-	if _, inside := adapter.Current(); inside {
+	resumeText := displayCommand(resumeCommand)
+	if result.Reference != "" {
+		resumeText = "agent-teleport resume " + result.Reference
+	}
+	if _, err := fmt.Fprintf(a.Stdout, "resume with: %s\n", resumeText); err != nil {
+		return err
+	}
+	if _, inside := adapter.Current(); inside && result.Reference == "" {
 		if _, err := fmt.Fprintf(a.Stdout, "or switch to it in this chat: %s\n", adapter.Switch(result.SessionID)); err != nil {
 			return err
 		}
@@ -364,7 +380,11 @@ func describeImport(providerName string, result provider.ImportResult, dryRun bo
 	if dryRun {
 		formats = dryRunSummaries
 	}
-	return fmt.Sprintf(formats[result.Outcome], providerName, result.SessionID, result.Workspace)
+	message := fmt.Sprintf(formats[result.Outcome], providerName, result.SessionID, result.Workspace)
+	if result.Reference != "" {
+		message += " (isolated as " + result.Reference + ")"
+	}
+	return message
 }
 
 var importSummaries = map[provider.ImportOutcome]string{
@@ -597,7 +617,7 @@ func (a *App) selectStoredSession(opened stores, selector string, last, includeA
 		return opened.current()
 	}
 	// A full ID needs no listing, which reads every session.
-	if isSessionID(selector) {
+	if isSessionID(selector) || strings.HasPrefix(selector, "iso-") {
 		if session, err := opened.session(selector); err == nil {
 			return session, nil
 		}
@@ -624,7 +644,7 @@ func (a *App) chooseSession(sessions []provider.Session, includeAll bool) (provi
 	writer := tabwriter.NewWriter(&rows, 0, 4, 2, ' ', 0)
 	now := a.Now()
 	for index, session := range sessions {
-		columns := []string{fmt.Sprintf("%3d", index+1), relativeTime(now, session.UpdatedAt), adapterFor(session.Provider).Command, shortID(session.ID)}
+		columns := []string{fmt.Sprintf("%3d", index+1), relativeTime(now, session.UpdatedAt), adapterFor(session.Provider).Command, displaySessionID(session)}
 		if includeAll {
 			columns = append(columns, session.Workspace)
 		}
@@ -729,7 +749,7 @@ func selectSession(sessions []provider.Session, selector string, last bool) (pro
 	// The most precise kind of match wins: an ID prefix, then an exact title,
 	// then a part of a title in any case.
 	for _, matches := range []func(provider.Session) bool{
-		func(session provider.Session) bool { return strings.HasPrefix(session.ID, selector) },
+		func(session provider.Session) bool { return strings.HasPrefix(session.Selector(), selector) },
 		func(session provider.Session) bool { return session.Title == selector },
 		func(session provider.Session) bool {
 			return strings.Contains(strings.ToLower(session.Title), strings.ToLower(selector))
@@ -757,7 +777,7 @@ func ambiguousSelector(selector string, matches []provider.Session) error {
 	var message strings.Builder
 	fmt.Fprintf(&message, "session selector %q matches %d sessions; use an ID:", selector, len(matches))
 	for _, session := range matches {
-		fmt.Fprintf(&message, "\n  %s  %s", shortID(session.ID), shorten(session.Title))
+		fmt.Fprintf(&message, "\n  %s  %s", displaySessionID(session), shorten(session.Title))
 	}
 	return errors.New(message.String())
 }
@@ -872,4 +892,41 @@ func writeJSON(output io.Writer, value any) error {
 	encoder := json.NewEncoder(output)
 	encoder.SetIndent("", "  ")
 	return encoder.Encode(value)
+}
+
+// displaySessionID preserves a managed reference in tables and diagnostics.
+func displaySessionID(session provider.Session) string {
+	if session.Reference != "" {
+		return session.Reference
+	}
+	return shortID(session.ID)
+}
+
+func (a *App) resume(ctx context.Context, args []string) error {
+	set := newFlagSet("resume")
+	positional, err := a.parse(set, args, resumeUsage)
+	if err != nil || len(positional) != 1 {
+		return usageOrHelp(err, "resume requires one session or isolated reference")
+	}
+	if err := resumeAllowed(false, true); err != nil {
+		return err
+	}
+	opened, err := a.openStores(ctx)
+	if err != nil {
+		return err
+	}
+	defer opened.close()
+	session, err := a.selectStoredSession(opened, positional[0], false, true)
+	if err != nil {
+		return err
+	}
+	command, err := opened[session.Provider].ResumeCommand(session.Selector(), session.Workspace)
+	if err != nil {
+		return err
+	}
+	command.Stdin, command.Stdout, command.Stderr = a.Stdin, a.Stdout, a.Stderr
+	if err := command.Run(); err != nil {
+		return fmt.Errorf("resume session: %w", err)
+	}
+	return nil
 }
