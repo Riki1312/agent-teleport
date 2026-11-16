@@ -74,46 +74,49 @@ func (m *managedStore) Sessions(workspace string) ([]provider.Session, error) {
 	return sessions, nil
 }
 
-func (m *managedStore) Session(reference string) (provider.Session, error) {
+// resolve binds a selector to one native store before an operation starts.
+func (m *managedStore) resolve(reference string) (*Store, string, error) {
 	if !strings.HasPrefix(reference, "iso-") {
-		session, err := m.primary.Session(reference)
-		if m.primary.isolation != nil {
-			session.Reference = m.primary.isolation.referenceFor(session.ID)
-		}
-		return session, err
+		return m.primary, reference, nil
 	}
 	i, id, err := m.lookup(reference)
 	if err != nil {
+		return nil, "", err
+	}
+	return m.primary.isolatedStore(i), id, nil
+}
+
+func (m *managedStore) Session(reference string) (provider.Session, error) {
+	store, id, err := m.resolve(reference)
+	if err != nil {
 		return provider.Session{}, err
 	}
-	session, err := m.primary.isolatedStore(i).Session(id)
-	session.Reference = reference
+	session, err := store.Session(id)
+	if err == nil && store.isolation != nil {
+		session.Reference = store.isolation.referenceFor(session.ID)
+	}
 	return session, err
 }
 
 func (m *managedStore) Export(reference string, created time.Time) (archive.Archive, error) {
-	if !strings.HasPrefix(reference, "iso-") {
-		return m.primary.Export(reference, created)
-	}
-	i, id, err := m.lookup(reference)
+	store, id, err := m.resolve(reference)
 	if err != nil {
 		return archive.Archive{}, err
 	}
-	return m.primary.isolatedStore(i).Export(id, created)
+	return store.Export(id, created)
 }
 
-func (m *managedStore) ResumeCommand(reference, workspace string) (*exec.Cmd, error) {
-	if !strings.HasPrefix(reference, "iso-") {
-		return m.primary.ResumeCommand(reference, workspace)
-	}
-	i, id, err := m.lookup(reference)
+func (m *managedStore) PrepareResume(reference, workspace string) (*exec.Cmd, error) {
+	store, id, err := m.resolve(reference)
 	if err != nil {
 		return nil, err
 	}
-	if err := prepareIsolation(i); err != nil {
-		return nil, err
+	if store.isolation != nil {
+		if err := prepareIsolation(*store.isolation); err != nil {
+			return nil, err
+		}
 	}
-	return m.primary.isolatedStore(i).ResumeCommand(id, workspace)
+	return store.PrepareResume(id, workspace)
 }
 
 func (m *managedStore) Import(request provider.ImportRequest) (provider.ImportResult, error) {

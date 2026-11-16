@@ -55,10 +55,14 @@ func (s *Store) baseHome() string {
 
 func (s *Store) isolatedStore(i isolatedImport) *Store {
 	return &Store{ctx: s.ctx, binary: s.binary, home: i.home(), version: s.version, layout: s.layout,
-		isolation: &i, runtime: isolationArguments(i.home())}
+		isolation: &i}
 }
 
-func isolationArguments(home string) []string {
+func (s *Store) runtimeArguments() []string {
+	if s.isolation == nil {
+		return nil
+	}
+	home := s.home
 	// Explicit storage overrides outrank inherited CODEX_SQLITE_HOME and
 	// user-configured sqlite_home/log_dir; shared configuration must never
 	// redirect the isolated process to the primary session databases.
@@ -74,7 +78,7 @@ func (s *Store) validateIsolation(workspace string) error {
 	if s.isolation == nil {
 		return nil
 	}
-	arguments := append([]string{"app-server", "--print-startup-config"}, s.runtime...)
+	arguments := append([]string{"app-server", "--print-startup-config"}, s.runtimeArguments()...)
 	command := exec.CommandContext(s.ctx, s.binary, arguments...)
 	command.Env = codexEnvironment(s.home)
 	if info, err := os.Stat(workspace); err == nil && info.IsDir() {
@@ -161,7 +165,7 @@ func (s *Store) loadIsolation() error {
 	if err != nil {
 		return err
 	}
-	s.isolation, s.runtime = &i, isolationArguments(s.home)
+	s.isolation = &i
 	return nil
 }
 

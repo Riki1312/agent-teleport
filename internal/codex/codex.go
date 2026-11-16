@@ -72,7 +72,6 @@ type Store struct {
 	version   string
 	layout    layout
 	client    *appserver.Client
-	runtime   []string
 	isolation *isolatedImport
 }
 
@@ -194,13 +193,13 @@ func (s *Store) Export(id string, createdAt time.Time) (archive.Archive, error) 
 	}, exported.payloads())
 }
 
-// ResumeCommand returns the Codex command that continues sessionID in
+// PrepareResume returns the Codex command that continues sessionID in
 // workspace.
-func (s *Store) ResumeCommand(sessionID, workspace string) (*exec.Cmd, error) {
+func (s *Store) PrepareResume(sessionID, workspace string) (*exec.Cmd, error) {
 	if err := s.validateIsolation(workspace); err != nil {
 		return nil, err
 	}
-	arguments := append([]string{}, s.runtime...)
+	arguments := s.runtimeArguments()
 	if s.isolation != nil {
 		arguments = append(arguments, "--no-daemon")
 	}
@@ -376,5 +375,5 @@ func (s *Store) startAppServer(arguments ...string) (*appserver.Client, error) {
 			return nil, err
 		}
 	}
-	return appserver.Start(s.ctx, s.binary, s.home, append(append([]string{}, s.runtime...), arguments...)...)
+	return appserver.Start(s.ctx, s.binary, s.home, append(s.runtimeArguments(), arguments...)...)
 }

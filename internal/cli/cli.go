@@ -12,8 +12,6 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"os/exec"
-	"path/filepath"
 	"slices"
 	"strconv"
 	"strings"
@@ -348,15 +346,7 @@ func (a *App) importInto(adapter provider.Adapter, store provider.Store, request
 	if result.Reference != "" {
 		reference = result.Reference
 	}
-	resumeCommand, err := store.ResumeCommand(reference, result.Workspace)
-	if err != nil {
-		return err
-	}
-	resumeText := displayCommand(resumeCommand)
-	if result.Reference != "" {
-		resumeText = "agent-teleport resume " + result.Reference
-	}
-	if _, err := fmt.Fprintf(a.Stdout, "resume with: %s\n", resumeText); err != nil {
+	if _, err := fmt.Fprintf(a.Stdout, "resume with: agent-teleport resume %s\n", reference); err != nil {
 		return err
 	}
 	if _, inside := adapter.Current(); inside && result.Reference == "" {
@@ -367,11 +357,7 @@ func (a *App) importInto(adapter provider.Adapter, store provider.Store, request
 	if !resume {
 		return nil
 	}
-	resumeCommand.Stdin, resumeCommand.Stdout, resumeCommand.Stderr = a.Stdin, a.Stdout, a.Stderr
-	if err := resumeCommand.Run(); err != nil {
-		return fmt.Errorf("resume imported session: %w", err)
-	}
-	return nil
+	return a.runResume(store, reference, result.Workspace)
 }
 
 // describeImport returns the one-line summary of an import outcome.
@@ -401,13 +387,6 @@ var dryRunSummaries = map[provider.ImportOutcome]string{
 	provider.Replaced:  "would replace %s session %s in %s",
 	provider.Unchanged: "%s session %s is already up to date in %s",
 	provider.KeptNewer: "would keep %s session %s in %s: the local copy is newer than the archive",
-}
-
-// displayCommand formats a command the way a person would type it.
-func displayCommand(command *exec.Cmd) string {
-	arguments := slices.Clone(command.Args)
-	arguments[0] = filepath.Base(arguments[0])
-	return strings.Join(arguments, " ")
 }
 
 // doctorReport is the JSON representation of doctor output.
@@ -920,7 +899,11 @@ func (a *App) resume(ctx context.Context, args []string) error {
 	if err != nil {
 		return err
 	}
-	command, err := opened[session.Provider].ResumeCommand(session.Selector(), session.Workspace)
+	return a.runResume(opened[session.Provider], session.Selector(), session.Workspace)
+}
+
+func (a *App) runResume(store provider.Store, reference, workspace string) error {
+	command, err := store.PrepareResume(reference, workspace)
 	if err != nil {
 		return err
 	}

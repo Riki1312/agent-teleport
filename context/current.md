@@ -32,7 +32,6 @@
 ## Next work
 
 1. Add fish completion once fish can be tested.
-2. Publishing: the plugin marketplace, release downloads, and `go install` work for people without access only once the repository is public; private vulnerability reporting must then be enabled for `SECURITY.md`.
 
 ## Open questions
 

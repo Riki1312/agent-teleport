@@ -4,9 +4,13 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"os/exec"
 	"slices"
+	"strings"
 	"testing"
 	"time"
+
+	"github.com/Riki1312/agent-teleport/internal/provider"
 )
 
 func TestParseAcceptsFlagsBetweenArguments(t *testing.T) {
@@ -92,5 +96,49 @@ func TestVersionSucceeds(t *testing.T) {
 	// then
 	if err != nil || !bytes.HasPrefix(output.Bytes(), []byte("agent-teleport ")) {
 		t.Fatalf("--version = %q, %v", output, err)
+	}
+}
+
+// Embedding the unused store operations makes unexpected calls fail rather
+// than giving the fixture an implementation unrelated to this boundary.
+type instructionStore struct {
+	provider.Store
+	result   provider.ImportResult
+	prepared int
+}
+
+func (s *instructionStore) Import(provider.ImportRequest) (provider.ImportResult, error) {
+	return s.result, nil
+}
+
+var errResumePreparation = errors.New("runtime setup unavailable")
+
+func (s *instructionStore) PrepareResume(string, string) (*exec.Cmd, error) {
+	s.prepared++
+	return nil, errResumePreparation
+}
+
+func TestImportInstructionsDoNotPrepareResume(t *testing.T) {
+	adapter := provider.Adapter{Name: "Codex", Current: func() (string, bool) { return "", false }}
+	for _, test := range []struct{ name, reference string }{{"normal", ""}, {"isolated", "iso-0123456789abcdef"}} {
+		t.Run(test.name, func(t *testing.T) {
+			reference := test.reference
+			var output bytes.Buffer
+			store := &instructionStore{result: provider.ImportResult{SessionID: savedSessionID, Reference: reference, Workspace: "/workspace", Outcome: provider.Imported}}
+			app := &App{Stdout: &output}
+			if err := app.importInto(adapter, store, provider.ImportRequest{}, false); err != nil {
+				t.Fatal(err)
+			}
+			selector := reference
+			if selector == "" {
+				selector = savedSessionID
+			}
+			if !strings.Contains(output.String(), "resume with: agent-teleport resume "+selector) || store.prepared != 0 {
+				t.Fatalf("instructions prepared runtime or selected another copy: %q, calls=%d", output.String(), store.prepared)
+			}
+			if err := app.runResume(store, selector, "/workspace"); !errors.Is(err, errResumePreparation) || store.prepared != 1 {
+				t.Fatalf("launch skipped runtime preparation: %v, calls=%d", err, store.prepared)
+			}
+		})
 	}
 }

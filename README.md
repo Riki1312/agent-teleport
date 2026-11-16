@@ -19,7 +19,7 @@ git pull
 agent-teleport open fix-login
 ```
 
-`open` adds the session to the local agent, mapped to that checkout, and tells you how to continue it: `claude --resume <id>`, or `/resume <id>` without leaving a running Claude Code chat. The agent sees the whole conversation and the paths of the new checkout.
+`open` adds the session to the local agent, mapped to that checkout, and prints `agent-teleport resume <id>` to continue it in a terminal. In a running Claude Code chat, `/resume <id>` switches to a normal local copy. The agent sees the whole conversation and the paths of the new checkout.
 
 Everything also works from a terminal:
 
@@ -94,7 +94,7 @@ This preserves native session IDs and existing histories. Isolated imports live 
 
 `list` includes an `iso-…` reference for each managed import. Use that reference with `resume`, `export`, or `save`, for example `agent-teleport resume iso-0123456789abcdef`. `status --isolated` compares saved repository sessions with their isolated copies. Native forks created within an isolated home can also be selected by their printed reference. Archives keep the original provider identity; local receipts and routing references are not added to their manifests.
 
-Isolation covers session histories and state databases. Configuration, profiles, global instructions, skills, plugins, rules, hooks, and existing file-backed login are shared by reference with the normal Codex home. Changes to shared settings or login affect that normal setup too. Native keyring namespaces are home-specific, so keyring-backed login or MCP integrations can require a separate sign-in. An isolated import does not appear in the normal Codex resume picker; return through `agent-teleport resume`.
+Isolation covers session histories and databases. The copy reuses normal Codex settings, skills, plugins, and file-backed login; edits to shared settings or login affect the normal setup too. Native keyring namespaces are home-specific, so keyring-backed login or MCP integrations can require a separate sign-in. An isolated import does not appear in the normal Codex resume picker; return through `agent-teleport resume`.
 
 ## What travels, and what does not
 

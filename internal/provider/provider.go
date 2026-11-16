@@ -61,9 +61,9 @@ type Store interface {
 	Export(id string, createdAt time.Time) (archive.Archive, error)
 	// Import applies the fast-forward update rule to the archived session.
 	Import(request ImportRequest) (ImportResult, error)
-	// ResumeCommand returns the provider command that continues sessionID in
-	// workspace.
-	ResumeCommand(sessionID, workspace string) (*exec.Cmd, error)
+	// PrepareResume returns the provider command that continues sessionID in
+	// workspace. It may check runtime requirements or refresh shared resources.
+	PrepareResume(sessionID, workspace string) (*exec.Cmd, error)
 	// Close releases any process the store started.
 	Close()
 }

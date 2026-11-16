@@ -204,9 +204,9 @@ func (s *Store) Export(id string, createdAt time.Time) (archive.Archive, error) 
 	}, session.payloads())
 }
 
-// ResumeCommand returns the Claude Code command that continues sessionID in
+// PrepareResume returns the Claude Code command that continues sessionID in
 // workspace.
-func (s *Store) ResumeCommand(sessionID, workspace string) (*exec.Cmd, error) {
+func (s *Store) PrepareResume(sessionID, workspace string) (*exec.Cmd, error) {
 	command := exec.CommandContext(s.ctx, s.binary, "--resume", sessionID)
 	command.Dir = workspace
 	return command, nil

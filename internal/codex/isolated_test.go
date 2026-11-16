@@ -150,7 +150,7 @@ func TestIsolatedResumeBindsItsStoreAndOverridesSharedDatabaseConfig(t *testing.
 		t.Fatal(err)
 	}
 	store.binary = probe
-	command, err := store.ResumeCommand(i.SessionID, i.Workspace)
+	command, err := store.PrepareResume(i.SessionID, i.Workspace)
 	if err != nil {
 		t.Fatal(err)
 	}
