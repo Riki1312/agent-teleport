@@ -120,6 +120,9 @@ func (m *managedStore) PrepareResume(reference, workspace string) (*exec.Cmd, er
 }
 
 func (m *managedStore) Import(request provider.ImportRequest) (provider.ImportResult, error) {
+	if request.Isolated && request.CopyConflicts != "" {
+		return provider.ImportResult{}, errors.New("copying conflicting histories cannot be combined with isolated import")
+	}
 	if !request.Isolated {
 		result, err := m.primary.Import(request)
 		if err == nil && m.primary.isolation != nil {

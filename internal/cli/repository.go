@@ -87,7 +87,7 @@ func (a *App) save(ctx context.Context, args []string) error {
 		return err
 	}
 	if previous != nil {
-		state, err := compareSaved(adapter, store, repo, *previous, session.Reference != "")
+		state, err := compareSaved(adapter, store, repo, *previous, provider.ImportRequest{Isolated: session.Reference != ""})
 		switch {
 		case errors.Is(err, provider.ErrDiverged):
 			return fmt.Errorf("the local copy of %s has diverged from the one saved as %s: run agent-teleport open %s --replace to take the saved copy, or fork the session in %s and save the fork under another --name", session.ID, target, target, adapter.Name)
@@ -211,12 +211,13 @@ func (a *App) reportSecrets(name string, findings []secrets.Finding, allowed boo
 
 // compareSaved relates a saved session to the local copy, through a dry-run
 // import of the saved session into its place in this checkout.
-func compareSaved(adapter provider.Adapter, store provider.Store, repo repository.Repository, saved archive.Archive, isolated bool) (syncState, error) {
+func compareSaved(adapter provider.Adapter, store provider.Store, repo repository.Repository, saved archive.Archive, request provider.ImportRequest) (syncState, error) {
 	local, err := adapter.Relocate(saved, repository.Workspace, repo.Root(), repository.Home)
 	if err != nil {
 		return unreadable, err
 	}
-	result, err := store.Import(provider.ImportRequest{Archive: local, Workspace: local.Manifest.Workspace, DryRun: true, Isolated: isolated})
+	request.Archive, request.Workspace, request.DryRun = local, local.Manifest.Workspace, true
+	result, err := store.Import(request)
 	if errors.Is(err, provider.ErrDiverged) {
 		return diverged, err
 	}
@@ -232,11 +233,15 @@ func (a *App) open(ctx context.Context, args []string) error {
 	dryRun := set.Bool("dry-run", false, "")
 	resume := set.Bool("resume", false, "")
 	isolated := set.Bool("isolated", false, "")
+	copyConflicts := set.String("copy-conflicts", "", "")
 	positional, err := a.parse(set, args, openUsage)
 	if err != nil || len(positional) > 1 || (len(positional) == 0 && !a.Interactive) {
 		return usageOrHelp(err, "open requires one saved session name")
 	}
 	if err := resumeAllowed(*dryRun, *resume); err != nil {
+		return err
+	}
+	if err := copyConflictsAllowed(set, *copyConflicts, *replace || *isolated); err != nil {
 		return err
 	}
 	repo, err := currentRepository(ctx)
@@ -266,7 +271,7 @@ func (a *App) open(ctx context.Context, args []string) error {
 		return err
 	}
 	defer store.Close()
-	return a.importInto(adapter, store, provider.ImportRequest{Archive: local, Workspace: local.Manifest.Workspace, Replace: *replace, DryRun: *dryRun, Isolated: *isolated}, *resume)
+	return a.importInto(adapter, store, provider.ImportRequest{Archive: local, Workspace: local.Manifest.Workspace, Replace: *replace, DryRun: *dryRun, Isolated: *isolated, CopyConflicts: *copyConflicts}, *resume)
 }
 
 // chooseSaved asks the person at the terminal to choose a saved session.
@@ -313,9 +318,13 @@ func (a *App) status(ctx context.Context, args []string) error {
 	set := newFlagSet("status")
 	asJSON := set.Bool("json", false, "")
 	isolated := set.Bool("isolated", false, "")
+	copyConflicts := set.String("copy-conflicts", "", "")
 	positional, err := a.parse(set, args, statusUsage)
 	if err != nil || len(positional) > 0 {
 		return usageOrHelp(err, "status accepts no arguments")
+	}
+	if err := copyConflictsAllowed(set, *copyConflicts, *isolated); err != nil {
+		return err
 	}
 	repo, err := currentRepository(ctx)
 	if err != nil {
@@ -328,8 +337,9 @@ func (a *App) status(ctx context.Context, args []string) error {
 	opened := stores{}
 	defer opened.close()
 	entries := make([]statusEntry, 0, len(saved))
+	mode := provider.ImportRequest{Isolated: *isolated, CopyConflicts: *copyConflicts}
 	for _, session := range saved {
-		entries = append(entries, a.statusOf(ctx, repo, session, opened, *isolated))
+		entries = append(entries, a.statusOf(ctx, repo, session, opened, mode))
 	}
 	if *asJSON {
 		return writeJSON(a.Stdout, entries)
@@ -360,7 +370,7 @@ func (a *App) status(ctx context.Context, args []string) error {
 
 // statusOf compares one saved session with its local copy, opening the
 // session's provider on first use.
-func (a *App) statusOf(ctx context.Context, repo repository.Repository, saved repository.Saved, opened stores, isolated bool) statusEntry {
+func (a *App) statusOf(ctx context.Context, repo repository.Repository, saved repository.Saved, opened stores, mode provider.ImportRequest) statusEntry {
 	entry := statusEntry{Name: saved.Name, State: unreadable}
 	if saved.Err != nil {
 		entry.Error = saved.Err.Error()
@@ -385,7 +395,7 @@ func (a *App) statusOf(ctx context.Context, repo repository.Repository, saved re
 		}
 		opened[adapter.ID] = store
 	}
-	state, err := compareSaved(adapter, store, repo, saved.Archive, isolated)
+	state, err := compareSaved(adapter, store, repo, saved.Archive, mode)
 	entry.State = state
 	if err != nil && state != diverged {
 		entry.Error = err.Error()

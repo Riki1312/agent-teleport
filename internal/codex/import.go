@@ -23,9 +23,19 @@ import (
 // Codex. Nothing changes before the whole session has been planned, and a dry
 // run never starts App Server.
 func (s *Store) Import(request provider.ImportRequest) (provider.ImportResult, error) {
+	if request.CopyConflicts != "" && (request.Replace || request.Isolated) {
+		return provider.ImportResult{}, errors.New("copying conflicting histories cannot be combined with replacement or isolation")
+	}
 	session, err := s.prepareSession(request.Archive, request.Workspace)
 	if err != nil {
 		return provider.ImportResult{}, err
+	}
+	if request.CopyConflicts != "" && !request.DryRun {
+		unlock, err := lockThread(s.home, "agent-teleport-copy-conflicts")
+		if err != nil {
+			return provider.ImportResult{}, fmt.Errorf("lock conflict-copy import: %w", err)
+		}
+		defer unlock()
 	}
 	return s.importSession(session, request)
 }
@@ -40,17 +50,35 @@ func (s *Store) importSession(session codexSession, request provider.ImportReque
 		if client, err = s.appServer(); err != nil {
 			return provider.ImportResult{}, err
 		}
-		if err := s.recoverSession(client, session); err != nil {
-			return provider.ImportResult{}, err
+	}
+	var plan sessionPlan
+	var copies []provider.ThreadCopy
+	if request.CopyConflicts != "" {
+		session, plan, copies, err = s.planConflictCopy(client, session, request.CopyConflicts)
+	} else {
+		if client != nil {
+			err = s.recoverSession(client, session)
+		}
+		if err == nil {
+			plan, err = s.planSession(session, request.Replace)
 		}
 	}
-	plan, err := s.planSession(session, request.Replace)
 	if err != nil {
 		return provider.ImportResult{}, err
 	}
 	root := session.head(session.root)
-	result := provider.ImportResult{SessionID: session.root, Workspace: root.meta.CWD, Outcome: plan.outcome}
-	if request.DryRun || !plan.changes() {
+	result := provider.ImportResult{SessionID: session.root, Workspace: root.meta.CWD, Outcome: plan.outcome, Copies: copies}
+	if request.DryRun {
+		return result, nil
+	}
+	if !plan.changes() {
+		if len(copies) > 0 {
+			// A previous attempt may have completed placement before native
+			// verification. Check the copied history again on retry.
+			if err := s.verifyImportedSession(client, session, plan); err != nil {
+				return provider.ImportResult{}, fmt.Errorf("verify copied history: %w", err)
+			}
+		}
 		return result, nil
 	}
 	if err := s.executePlan(client, session, plan); err != nil {
@@ -82,30 +110,37 @@ func (s *Store) prepareSession(source archive.Archive, workspace string) (codexS
 // an earlier import left unfinished.
 func (s *Store) recoverSession(client *appserver.Client, session codexSession) error {
 	for _, thread := range session.threads() {
-		stored, err := findSession(s.home, thread)
-		if err != nil {
+		if err := s.recoverThread(client, session.root, thread); err != nil {
 			return err
 		}
-		for _, path := range stored.appending {
-			if err := recoverAppend(s.home, thread, path); err != nil {
-				return err
-			}
+	}
+	return nil
+}
+
+func (s *Store) recoverThread(client *appserver.Client, root, thread string) error {
+	stored, err := findSession(s.home, thread)
+	if err != nil {
+		return err
+	}
+	for _, path := range stored.appending {
+		if err := recoverAppend(s.home, thread, path); err != nil {
+			return err
 		}
-		for _, destination := range stored.pending {
-			if thread != session.root {
-				// Only the root is ever replaced; any other thread can only
-				// have a stage file left by an interrupted placement.
-				if _, err := os.Stat(rollbackPath(destination)); !errors.Is(err, os.ErrNotExist) {
-					return fmt.Errorf("thread %s has an interrupted replacement that agent-teleport cannot recover", thread)
-				}
-				if err := fsutil.RemoveIfExists(stagePath(destination)); err != nil {
-					return fmt.Errorf("remove abandoned stage file: %w", err)
-				}
-				continue
+	}
+	for _, destination := range stored.pending {
+		if thread != root {
+			// Only the root is ever replaced; any other thread can only
+			// have a stage file left by an interrupted placement.
+			if _, err := os.Stat(rollbackPath(destination)); !errors.Is(err, os.ErrNotExist) {
+				return fmt.Errorf("thread %s has an interrupted replacement that agent-teleport cannot recover", thread)
 			}
-			if err := s.layout.recoverReplacement(destination, thread, resetThread(client, thread), s.repairThread(client)); err != nil {
-				return err
+			if err := fsutil.RemoveIfExists(stagePath(destination)); err != nil {
+				return fmt.Errorf("remove abandoned stage file: %w", err)
 			}
+			continue
+		}
+		if err := s.layout.recoverReplacement(destination, thread, resetThread(client, thread), s.repairThread(client)); err != nil {
+			return err
 		}
 	}
 	return nil
@@ -173,10 +208,14 @@ func (p sessionPlan) changes() bool {
 // planSession decides, without changing local state, how to import every
 // thread of the session.
 func (s *Store) planSession(session codexSession, replace bool) (sessionPlan, error) {
+	return s.planWithCopies(session, replace, nil)
+}
+
+func (s *Store) planWithCopies(session codexSession, replace bool, copied map[string]bool) (sessionPlan, error) {
 	plan := sessionPlan{files: make([]filePlan, len(session.files)), objects: map[string]localObject{}}
 	outcomes := map[string]provider.ImportOutcome{}
 	for _, thread := range session.threads() {
-		outcome, err := s.planThread(session, thread, replace, &plan)
+		outcome, err := s.planThread(session, thread, replace, copied[thread], &plan)
 		if err != nil {
 			return sessionPlan{}, err
 		}
@@ -190,14 +229,21 @@ func (s *Store) planSession(session codexSession, replace bool) (sessionPlan, er
 			}
 		}
 	}
-	// Only threads the plan writes must be closed, so comparing a session that
-	// Codex has open succeeds.
+	objects := make(map[string]rolloutFile, len(session.files))
 	for index, file := range session.files {
-		if plan.files[index].step != stepKeep {
+		if step := plan.files[index].step; step != stepKeep {
+			if step == stepReplay {
+				base := *file.meta.Base
+				if _, err := revertedTurn(objects[base.ObjectID], base); err != nil {
+					return sessionPlan{}, err
+				}
+			}
+			// Only threads the plan writes must be closed.
 			if err := requireClosed(s.home, file.meta.ID); err != nil {
 				return sessionPlan{}, err
 			}
 		}
+		objects[file.object] = file
 	}
 	return plan, nil
 }
@@ -206,7 +252,7 @@ func (s *Store) planSession(session codexSession, replace bool) (sessionPlan, er
 // chain: the original rollout, then each revert snapshot. A local copy is
 // compared segment by segment, where a segment is the original rollout or the
 // records a snapshot holds after its revert header.
-func (s *Store) planThread(session codexSession, thread string, replace bool, plan *sessionPlan) (provider.ImportOutcome, error) {
+func (s *Store) planThread(session codexSession, thread string, replace, copied bool, plan *sessionPlan) (provider.ImportOutcome, error) {
 	var chain []int
 	for index, file := range session.files {
 		if file.meta.ID == thread {
@@ -214,7 +260,7 @@ func (s *Store) planThread(session codexSession, thread string, replace bool, pl
 		}
 	}
 	first := session.files[chain[0]]
-	member := isSessionThread(first, session.root)
+	member := isSessionThread(first, session.root) || copied
 	stored, err := findSession(s.home, thread)
 	if err != nil {
 		return "", err
@@ -222,11 +268,11 @@ func (s *Store) planThread(session codexSession, thread string, replace bool, pl
 	switch {
 	case len(stored.archived) > 0:
 		if !member {
-			return "", fmt.Errorf("ancestor thread %s is archived; use --isolated to preserve both histories", thread)
+			return "", threadPlanError{thread: thread, cause: fmt.Errorf("ancestor thread %s is archived; use --copy-conflicts SOURCE or --isolated to preserve both histories", thread)}
 		}
-		return "", fmt.Errorf("thread %s is archived at %s; restore or delete it in Codex before importing it", thread, strings.Join(stored.archived, ", "))
+		return "", threadPlanError{thread: thread, cause: fmt.Errorf("thread %s is archived at %s; restore or delete it in Codex before importing it", thread, strings.Join(stored.archived, ", "))}
 	case len(stored.pending) > 0 || len(stored.appending) > 0:
-		return "", fmt.Errorf("thread %s has an interrupted write; rerun without --dry-run to recover it", thread)
+		return "", threadPlanError{thread: thread, interrupted: true, cause: fmt.Errorf("thread %s has an interrupted write; rerun without --dry-run to recover it", thread)}
 	case len(stored.active) > 1:
 		return "", fmt.Errorf("thread %s has several rollouts: %s", thread, strings.Join(stored.active, ", "))
 	}
@@ -254,7 +300,7 @@ func (s *Store) planThread(session codexSession, thread string, replace bool, pl
 	}
 	replacingRoot := replace && thread == session.root
 	if member && local[0].meta.CWD != first.meta.CWD && !replacingRoot {
-		return "", fmt.Errorf("thread %s already exists in %s; import there with --cwd, or pass --replace", thread, local[0].meta.CWD)
+		return "", threadPlanError{thread: thread, cause: fmt.Errorf("thread %s already exists in %s; import there with --cwd, or pass --replace", thread, local[0].meta.CWD)}
 	}
 	incoming := make([]rolloutFile, len(chain))
 	for position, index := range chain {
@@ -273,8 +319,16 @@ func (s *Store) planThread(session codexSession, thread string, replace bool, pl
 	}
 	common := min(len(incomingSegments), len(localSegments))
 	for position := 0; position < common-1; position++ {
-		if !bytes.Equal(incomingSegments[position], localSegments[position]) {
-			return "", fmt.Errorf("thread %s has been reverted differently on this machine; delete it in Codex and import again", thread)
+		relation := compareHistories(localSegments[position], incomingSegments[position])
+		localBase := *local[position+1].meta.Base
+		incomingBase := *incoming[position+1].meta.Base
+		// Codex can append settings after the archived end of a reverted
+		// object. The read branch still needs the same prefix and revert point.
+		if (relation != historiesEqual && relation != localAhead) || localBase.EndOrdinalExclusive != incomingBase.EndOrdinalExclusive {
+			return "", threadPlanError{thread: thread, cause: fmt.Errorf("thread %s has been reverted differently on this machine; delete it in Codex and import again", thread)}
+		}
+		if err := checkReference(local[position], localBase); err != nil {
+			return "", err
 		}
 		plan.keep(chain[position], incoming[position], local[position], nil)
 	}
@@ -286,7 +340,7 @@ func (s *Store) planThread(session codexSession, thread string, replace bool, pl
 		keepLast()
 		return provider.Unchanged, nil
 	case !member:
-		return "", fmt.Errorf("ancestor thread %s differs locally from the history in the archive; use --isolated to preserve both histories", thread)
+		return "", threadPlanError{thread: thread, cause: fmt.Errorf("ancestor thread %s differs locally from the history in the archive; use --copy-conflicts SOURCE or --isolated to preserve both histories", thread)}
 	case len(incomingSegments) == len(localSegments) && relation == historiesEqual:
 		keepLast()
 		return provider.Unchanged, nil
@@ -300,12 +354,12 @@ func (s *Store) planThread(session codexSession, thread string, replace bool, pl
 		keepLast()
 	case relation == historiesDiverged && thread == session.root && len(session.files) == 1 && len(local) == 1:
 		if !replace {
-			return "", fmt.Errorf("session %s has %w; pass --replace to overwrite the local copy", thread, provider.ErrDiverged)
+			return "", threadPlanError{thread: thread, cause: fmt.Errorf("session %s has %w; pass --replace to overwrite the local copy", thread, provider.ErrDiverged)}
 		}
 		plan.files[chain[0]] = filePlan{step: stepReplace, path: stored.active[0]}
 		return provider.Replaced, nil
 	default:
-		return "", fmt.Errorf("thread %s has %w; only sessions of one thread can be replaced, so delete it in Codex and import again", thread, provider.ErrDiverged)
+		return "", threadPlanError{thread: thread, cause: fmt.Errorf("thread %s has %w; only sessions of one thread can be replaced, so delete it in Codex and import again", thread, provider.ErrDiverged)}
 	}
 	for _, index := range chain[common:] {
 		if isSubAgent(session.files[index], session.root) {
@@ -327,11 +381,13 @@ func isSubAgent(file rolloutFile, root string) bool {
 // and records it as the counterpart of the archived object.
 func (p *sessionPlan) keep(index int, incoming, local rolloutFile, records []byte) {
 	step := stepKeep
+	data := local.data
 	if len(records) > 0 {
 		step = stepAppend
+		data = append(bytes.Clone(data), records...)
 	}
 	p.files[index] = filePlan{step: step, path: local.location, size: int64(len(local.data)), records: records}
-	p.objects[incoming.object] = localObject{object: local.object, data: append(append([]byte{}, local.data...), records...), from: incoming.data}
+	p.objects[incoming.object] = localObject{object: local.object, data: data, from: incoming.data}
 }
 
 // localChain reads the local objects of a thread in chain order, from the
@@ -723,7 +779,7 @@ func (s *Store) verifyImportedSession(client *appserver.Client, session codexSes
 	if err != nil {
 		return err
 	}
-	if len(loaded.Turns) != session.turns || loaded.CWD != root.meta.CWD {
+	if (len(loaded.Turns) != session.turns && plan.outcome != provider.KeptNewer) || loaded.CWD != root.meta.CWD {
 		return fmt.Errorf("loaded session has %d turns in %q, want %d turns in %q", len(loaded.Turns), loaded.CWD, session.turns, root.meta.CWD)
 	}
 	for _, thread := range session.threads() {

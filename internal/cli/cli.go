@@ -287,11 +287,15 @@ func (a *App) importArchive(ctx context.Context, args []string) error {
 	dryRun := set.Bool("dry-run", false, "")
 	resume := set.Bool("resume", false, "")
 	isolated := set.Bool("isolated", false, "")
+	copyConflicts := set.String("copy-conflicts", "", "")
 	positional, err := a.parse(set, args, importUsage)
 	if err != nil || len(positional) != 1 {
 		return usageOrHelp(err, "import requires exactly one archive path or -")
 	}
 	if err := resumeAllowed(*dryRun, *resume); err != nil {
+		return err
+	}
+	if err := copyConflictsAllowed(set, *copyConflicts, *replace || *isolated); err != nil {
 		return err
 	}
 	if positional[0] == "-" && *resume {
@@ -314,7 +318,26 @@ func (a *App) importArchive(ctx context.Context, args []string) error {
 		return err
 	}
 	defer store.Close()
-	return a.importInto(adapter, store, provider.ImportRequest{Archive: source, Workspace: workspace, Replace: *replace, DryRun: *dryRun, Isolated: *isolated}, *resume)
+	return a.importInto(adapter, store, provider.ImportRequest{Archive: source, Workspace: workspace, Replace: *replace, DryRun: *dryRun, Isolated: *isolated, CopyConflicts: *copyConflicts}, *resume)
+}
+
+// copyConflictsAllowed checks that copy mode has a source label and is the
+// only override of the ordinary conflict behavior.
+func copyConflictsAllowed(set *flag.FlagSet, label string, incompatible bool) error {
+	provided := false
+	set.Visit(func(option *flag.Flag) {
+		provided = provided || option.Name == "copy-conflicts"
+	})
+	if !provided {
+		return nil
+	}
+	if label == "" || strings.TrimSpace(label) != label || len(label) > 128 {
+		return &UsageError{Message: "--copy-conflicts requires a source label of 1 to 128 bytes without surrounding whitespace"}
+	}
+	if incompatible {
+		return &UsageError{Message: "--copy-conflicts cannot be used with --replace or --isolated"}
+	}
+	return nil
 }
 
 // resumeAllowed rejects --resume where it cannot work: in a dry run, and
@@ -338,6 +361,11 @@ func (a *App) importInto(adapter provider.Adapter, store provider.Store, request
 	}
 	if _, err := fmt.Fprintln(a.Stdout, describeImport(adapter.Name, result, request.DryRun)); err != nil {
 		return err
+	}
+	for _, copy := range result.Copies {
+		if _, err := fmt.Fprintf(a.Stdout, "incoming thread %s uses %s\n", copy.SourceID, copy.DestinationID); err != nil {
+			return err
+		}
 	}
 	if request.DryRun {
 		return nil

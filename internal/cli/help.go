@@ -73,18 +73,20 @@ Examples:
 const importUsage = `Add a session from a .teleport archive, or from stdin with -.
 
 Usage:
-  agent-teleport import (ARCHIVE | -) [--cwd PATH] [--replace] [--isolated] [--dry-run] [--resume]
+  agent-teleport import (ARCHIVE | -) [--cwd PATH] [--replace] [--isolated] [--copy-conflicts SOURCE] [--dry-run] [--resume]
 
 The session is mapped to the current directory unless --cwd is given. When
 the session already exists, a copy that extends the other wins: a longer
 archive updates the local session, and a longer local session is kept.
-Copies that have diverged need --replace. Sessions open in their agent are
-never changed; close them first.
+Use --copy-conflicts SOURCE to keep both Codex histories in one profile.
+Reuse the same source label for related imports. Sessions open in their
+agent are never changed; close them first.
 
 Options:
   --cwd PATH   Map the session to PATH instead of the current directory
   --replace    Overwrite a diverged local copy, or one in another workspace
   --isolated   Keep this Codex history separate from existing local sessions
+  --copy-conflicts SOURCE   Copy conflicting Codex histories into this profile
   --dry-run    Check the import without changing anything
   --resume     Resume the session after importing it
 `
@@ -138,7 +140,7 @@ Options:
 const openUsage = `Add a session saved in this repository to its agent.
 
 Usage:
-  agent-teleport open [NAME] [--replace] [--isolated] [--dry-run] [--resume]
+  agent-teleport open [NAME] [--replace] [--isolated] [--copy-conflicts SOURCE] [--dry-run] [--resume]
 
 The session is mapped to this checkout and follows the same rule as
 import: a newer saved copy updates the local session, and a newer local
@@ -149,6 +151,7 @@ in the chat, and --resume is refused.
 Options:
   --replace    Overwrite a diverged local copy, or one in another workspace
   --isolated   Keep this Codex history separate from existing local sessions
+  --copy-conflicts SOURCE   Copy conflicting Codex histories into this profile
   --dry-run    Check the open without changing anything
   --resume     Resume the session after opening it
 `
@@ -156,13 +159,14 @@ Options:
 const statusUsage = `Compare the sessions saved in this repository with their local copies.
 
 Usage:
-  agent-teleport status [--isolated] [--json]
+  agent-teleport status [--isolated] [--copy-conflicts SOURCE] [--json]
 
 Each saved session is in sync, local ahead (save it), repository ahead
 (open it), diverged, or not opened.
 
 Options:
   --isolated   Compare with managed isolated Codex copies
+  --copy-conflicts SOURCE   Compare with copied Codex histories in this profile
   --json       Print machine-readable JSON
 `
 

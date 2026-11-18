@@ -242,30 +242,7 @@ func transferRevertedMultiAgentSession(t *testing.T, binary, codexPath, work str
 		child     = "01a1c03e-5302-7d83-83a8-dd5225e920ad"
 		wantTurns = 3
 	)
-	names := []string{
-		"rollout-2026-11-09T13-17-48-01a1c03e-3fe4-7502-a037-4d6415a7ea24.jsonl",
-		"rollout-2026-11-09T13-18-31-01a1c03e-3fe4-7502-a037-4d6415a7ea24_01a1c03e-eae4-79c1-89ce-3116151361ce.jsonl",
-		"rollout-2026-11-09T13-17-52-01a1c03e-5302-7d83-83a8-dd5225e920ad.jsonl",
-	}
-	var payloads []archive.Payload
-	for _, name := range names {
-		data, err := os.ReadFile(filepath.Join(moduleRoot(t), "testdata", "codex", "multi-agent", name))
-		if err != nil {
-			t.Fatal(err)
-		}
-		payloads = append(payloads, archive.Payload{Path: name, Data: data})
-	}
-	seed, err := archive.New(archive.Header{
-		Provider:        codex.Provider,
-		ProviderVersion: "0.167.0",
-		SessionID:       root,
-		Workspace:       "/workspace/source",
-		Home:            "/home/source/.codex",
-		CreatedAt:       time.Now(),
-	}, payloads)
-	if err != nil {
-		t.Fatal(err)
-	}
+	seed := revertedMultiAgentFixture(t)
 	seedPath := filepath.Join(work, "multi-agent-seed"+archive.Extension)
 	if err := seed.WriteFile(seedPath); err != nil {
 		t.Fatal(err)
@@ -301,6 +278,36 @@ func transferRevertedMultiAgentSession(t *testing.T, binary, codexPath, work str
 	if err != nil || read.CWD != targetCWD {
 		t.Fatalf("read spawned thread: %+v, %v", read, err)
 	}
+}
+
+func revertedMultiAgentFixture(t *testing.T) archive.Archive {
+	t.Helper()
+	const root = "01a1c03e-3fe4-7502-a037-4d6415a7ea24"
+	names := []string{
+		"rollout-2026-11-09T13-17-48-01a1c03e-3fe4-7502-a037-4d6415a7ea24.jsonl",
+		"rollout-2026-11-09T13-18-31-01a1c03e-3fe4-7502-a037-4d6415a7ea24_01a1c03e-eae4-79c1-89ce-3116151361ce.jsonl",
+		"rollout-2026-11-09T13-17-52-01a1c03e-5302-7d83-83a8-dd5225e920ad.jsonl",
+	}
+	var payloads []archive.Payload
+	for _, name := range names {
+		data, err := os.ReadFile(filepath.Join(moduleRoot(t), "testdata", "codex", "multi-agent", name))
+		if err != nil {
+			t.Fatal(err)
+		}
+		payloads = append(payloads, archive.Payload{Path: name, Data: data})
+	}
+	seed, err := archive.New(archive.Header{
+		Provider:        codex.Provider,
+		ProviderVersion: "0.167.0",
+		SessionID:       root,
+		Workspace:       "/workspace/source",
+		Home:            "/home/source/.codex",
+		CreatedAt:       time.Now(),
+	}, payloads)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return seed
 }
 
 type rolloutFixture struct {

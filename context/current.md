@@ -28,6 +28,7 @@
 - Claude in-session export keeps the latest completed assistant turn when the next active prompt has not yet been flushed, and excludes queued or recorded unfinished prompts. The Claude repository E2E reproduces this boundary.
 - Codex can append settings on resume and emit two settings records during revert. Import preserves archived settings and ordinals by restoring the fresh snapshot in one atomic write under the thread writer lock. Unit coverage rejects unknown extra records, changed history boundaries, and concurrent writers; the native transfer test keeps its busy-session probe in a separate home because resume can legitimately extend history.
 - Conflicting Codex ancestors can be preserved with managed `import --isolated` or `open --isolated`. Local `iso-` references route resume, export, and save; `status --isolated` compares the selected copies. The [isolated-import handoff](sessions/2026-11-15.md) records the implementation and runtime-sharing boundaries.
+- Codex `import`, `open`, and `status` also support `--copy-conflicts SOURCE` in the current profile. Compatible threads are reused, divergent incoming copies get stable IDs, and the dry run reports the mapping. Export retains the start record required to replay a reverted ancestor. The [conflict-copy handoff](sessions/2026-11-18.md) records verification.
 
 ## Next work
 

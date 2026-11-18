@@ -10,6 +10,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/Riki1312/agent-teleport/internal/archive"
+
 	"github.com/Riki1312/agent-teleport/internal/claude"
 	"github.com/Riki1312/agent-teleport/internal/codex"
 )
@@ -122,6 +124,19 @@ func TestCodexRepositorySession(t *testing.T) {
 	assertOutput(t, atClone(true, "open", "fixture"), "imported Codex session")
 	assertStates(t, atClone(true, "status", "--json"), map[string]string{"fixture": "in-sync"})
 	assertResumed(t, codexPath, targetHome, fixture.ID, clone, fixtureTurns(fixture.Data))
+
+	diverged := filepath.Join(work, "diverged"+archive.Extension)
+	writeArchive(t, diverged, fixture, origin, divergedCopy(t, fixture.Data))
+	conflictHome := mkdir(t, filepath.Join(work, "conflict-home"))
+	atConflict := func(wantSuccess bool, args ...string) []byte {
+		return runIn(t, binary, cleanEnvironment(conflictHome, codexPath), clone, nil, wantSuccess, args...)
+	}
+	atConflict(true, "import", diverged, "--cwd", clone)
+	assertStates(t, atConflict(true, "status", "--json"), map[string]string{"fixture": "diverged"})
+	out := atConflict(true, "open", "fixture", "--copy-conflicts", "workstation")
+	copied := destinationThread(t, out, fixture.ID)
+	assertStates(t, atConflict(true, "status", "--copy-conflicts", "workstation", "--json"), map[string]string{"fixture": "in-sync"})
+	assertResumed(t, codexPath, conflictHome, copied, clone, fixtureTurns(fixture.Data))
 }
 
 // initRepository creates a Git repository with one commit and returns its

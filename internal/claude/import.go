@@ -21,6 +21,9 @@ import (
 // atomically, and a longer local copy is kept. Nothing changes before the
 // whole session has been planned.
 func (s *Store) Import(request provider.ImportRequest) (provider.ImportResult, error) {
+	if request.CopyConflicts != "" {
+		return provider.ImportResult{}, errors.New("copying conflicting histories is currently supported only for Codex")
+	}
 	if request.Isolated {
 		return provider.ImportResult{}, errors.New("isolated imports are currently supported only for Codex")
 	}

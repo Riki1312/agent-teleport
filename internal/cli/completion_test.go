@@ -41,7 +41,7 @@ func TestCandidates(t *testing.T) {
 		"import ":           {filesCandidate},
 		"completion ":       {"bash", "zsh"},
 		"unknown ":          nil,
-		"status --":         {"--isolated", "--json"},
+		"status --":         {"--isolated", "--copy-conflicts", "--json"},
 		"save --allow-secr": {"--last", "--all", "--name", "--allow-secrets"},
 	} {
 		// when

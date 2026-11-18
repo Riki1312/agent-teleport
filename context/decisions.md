@@ -96,6 +96,12 @@ Each entry uses this shape:
 - `rationale`: A workspace move rewrites referenced ancestor bytes, so an existing ancestor with the same identity cannot always be reused. Separate native stores preserve both histories without merging events or rewriting provider identities.
 - `impact`: Receipts stay under the local provider home and never enter archives or repositories. Known local runtime resources, including file-backed login, are referenced without copying credentials; keyring-backed setup can require a separate sign-in. All isolated native processes force isolated database paths, check native managed storage requirements before initialization, and resume without shared-daemon reuse. A dry run validates without creating storage. The [implementation record](sessions/2026-11-15.md) owns native lifecycle evidence.
 
+### Copy Codex conflicts under stable IDs in the destination profile
+
+- `decision` — Offer explicit `--copy-conflicts SOURCE` for a normal import or repository open. Keep destination histories under their existing IDs and reserve stable copied IDs for conflicting incoming threads. Derive IDs from an explicit source label, canonical target workspace, and original thread ID. Reuse those copied IDs for retries and related archives. Report the mapping and use native Codex replay for verification. Apply the same mapping when comparing saved sessions with `status`.
+- `rationale` — A user's active sessions can live in one Codex profile while incompatible histories stay independently resumable. A source label distinguishes different incoming lineages without changing the archive format.
+- `impact` — IDs can change only in this explicit mode. The adapter rewrites known provider identity fields and preserves recorded text. A revert of an ancestor requires the removed turn's start record. Export retains this record while omitting the removed turn's contents.
+
 ### Append updates under Codex's writer lock
 
 - `decision`: Update a thread that the archive extends by appending the new records, while holding the exclusive `flock` that Codex keeps on `thread-writer-locks/<thread>.lock` for loaded threads. Record the original and final sizes in a marker until the append is durable. Refuse to append to, replace, or replay a thread that a Codex process has loaded.

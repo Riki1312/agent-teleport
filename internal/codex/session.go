@@ -185,7 +185,17 @@ func (l layout) readSession(home, thread string) (codexSession, error) {
 			}
 			inSession := ancestor.meta.SessionID == root.meta.ID || ancestor.meta.ID == root.meta.ID
 			if !inSession {
-				ancestor.data = ancestor.data[:base.EndByteOffset]
+				end := base.EndByteOffset
+				if file.isSnapshot() {
+					// Native revert needs to locate the first removed turn.
+					// Keep its boundary record without exporting its contents.
+					if _, err := revertedTurn(ancestor, *base); err != nil {
+						return err
+					}
+					end += int64(bytes.IndexByte(ancestor.data[end:], '\n') + 1)
+				}
+				ancestor.data = ancestor.data[:end]
+				ancestor.kinds = ancestor.kinds[:bytes.Count(ancestor.data, []byte{'\n'})]
 			}
 			if err := collect(ancestor, depth+1); err != nil {
 				return err
@@ -668,7 +678,7 @@ func revertedTurn(target rolloutFile, base historyBase) (string, error) {
 			return record.Payload.TurnID, nil
 		}
 	}
-	return "", fmt.Errorf("revert of %s does not start at a turn", base.ObjectID)
+	return "", fmt.Errorf("revert of %s is missing the first removed turn boundary; export the session again from its source profile", base.ObjectID)
 }
 
 // snapshotContinuation returns the records a snapshot holds after the header

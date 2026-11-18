@@ -101,6 +101,9 @@ type ImportRequest struct {
 	DryRun  bool
 	// Isolated imports into a managed separate history store, if supported.
 	Isolated bool
+	// CopyConflicts identifies the source history whose conflicting threads
+	// may be imported under new native IDs.
+	CopyConflicts string
 }
 
 // ImportOutcome is what an import did, or would do in a dry run.
@@ -119,6 +122,12 @@ const (
 	Replaced ImportOutcome = "replaced"
 )
 
+// ThreadCopy identifies an incoming thread imported under a different ID.
+type ThreadCopy struct {
+	SourceID      string
+	DestinationID string
+}
+
 // ImportResult reports the session an import produced.
 type ImportResult struct {
 	SessionID string
@@ -126,6 +135,8 @@ type ImportResult struct {
 	Reference string
 	Workspace string
 	Outcome   ImportOutcome
+	// Copies records the incoming IDs mapped to new native thread IDs.
+	Copies []ThreadCopy
 }
 
 // Diagnosis describes a local provider installation.

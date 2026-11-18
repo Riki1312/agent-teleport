@@ -80,9 +80,22 @@ agent-teleport inspect session.teleport    # validates without changing anything
 
 Importing is safe to repeat: a longer archive updates the local session, a longer local one is kept, identical copies are left alone, and a diverged copy is replaced only with `--replace`. A session that is open in its agent is never changed.
 
-### Keep conflicting Codex histories
+### Keep conflicting Codex histories in one profile
 
-When a Codex ancestor already exists locally with different history or workspace paths, import a separate copy:
+Use a source label to copy conflicting incoming Codex threads under stable IDs in the current profile. Compatible threads keep their existing IDs. The dry run prints the mapping and makes no changes.
+
+```sh
+agent-teleport import session.teleport --copy-conflicts old-workstation --dry-run
+agent-teleport import session.teleport --copy-conflicts old-workstation
+agent-teleport open fix-login --copy-conflicts old-workstation
+agent-teleport status --copy-conflicts old-workstation
+```
+
+Use the same label for later updates and related sessions from one source profile. When migrating both ancestors and forks, import the full ancestor sessions first. A fork archive may have only a prefix of a reverted ancestor, and a later import cannot fill in records from that ancestor's discarded branch. Use the returned ID to resume the imported session from the current profile.
+
+### Keep original IDs in separate Codex profiles
+
+With `--isolated`, a conflicting thread can use the same ID in a separate profile:
 
 ```sh
 agent-teleport import session.teleport --isolated --resume

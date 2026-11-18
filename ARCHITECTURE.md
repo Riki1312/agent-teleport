@@ -19,7 +19,7 @@ Non-goals:
 - Making models, MCP servers, plugins, or skills available on the destination machine.
 - Exporting the turn an agent is still working on.
 - Merging concurrent edits of one session made on different machines.
-- Renaming or cloning session identifiers, except through a provider's native fork.
+- Changing session identifiers outside a native fork or an explicit conflict-copy import.
 
 ## Fidelity model
 
@@ -30,12 +30,12 @@ A transfer is lossless with respect to the recorded provider event stream: an ar
 ```text
 agent-teleport list    [--all] [--json]
 agent-teleport export  [SESSION | --last] [--all] [-o PATH|-]
-agent-teleport import  (ARCHIVE | -) [--cwd PATH] [--replace] [--isolated] [--dry-run] [--resume]
+agent-teleport import  (ARCHIVE | -) [--cwd PATH] [--replace] [--isolated] [--copy-conflicts SOURCE] [--dry-run] [--resume]
 agent-teleport resume  SESSION
 agent-teleport inspect (ARCHIVE | -) [--json]
 agent-teleport save    [SESSION | --last] [--all] [--name NAME] [--allow-secrets]
-agent-teleport open    [NAME] [--replace] [--isolated] [--dry-run] [--resume]
-agent-teleport status  [--isolated] [--json]
+agent-teleport open    [NAME] [--replace] [--isolated] [--copy-conflicts SOURCE] [--dry-run] [--resume]
+agent-teleport status  [--isolated] [--copy-conflicts SOURCE] [--json]
 agent-teleport doctor  [--json]
 agent-teleport completion (bash | zsh)
 ```
@@ -183,6 +183,14 @@ Any failure or interruption before the commit point restores the old rollout, de
 ### Supported versions
 
 Each rollout layout covers a range of Codex versions: its turn boundary events, its workspace metadata events, and the size of its revert header. The current layout starts at Codex 0.165.0 and is tested through 0.169.0. Older versions fail closed. Newer versions are accepted with a `doctor` warning, because Codex releases every few days, while structural validation still rejects rollouts it does not recognize. CI runs the two-home test against every tested version, and raising the tested range requires it to pass against the new release. Older layouts are removed rather than kept.
+
+### Copy conflicting histories into the current profile
+
+Codex `import --copy-conflicts SOURCE` and `open --copy-conflicts SOURCE` keep ordinary compatible histories and copy incoming threads when the destination ID carries an incompatible history or is archived. Use one source label for related exports of the same profile. The adapter derives the copied UUIDv7 from the label, canonical target workspace, and original thread ID. A previously copied ID takes precedence so retries and later imports find the same copy. Repository `status --copy-conflicts SOURCE` checks against that same mapping. If that ID already carries incompatible history, the planner reports the conflict.
+
+The planner retries recognized conflicts using the same validated archive and a mapping of incoming IDs. It updates native identity fields and rollout names while preserving the lengths of UUIDs and all recorded text. Forks still point to the same ordinal and byte boundary. Codex replays reverts through its normal import path, which gives each destination snapshot its native object ID. The plan reports copied IDs before mutation in a dry run. Imports in this mode share an agent-teleport lock in the destination profile, and placement and append steps use the same recovery rules as ordinary imports.
+
+A fork export includes the first removed turn's start record when native replay needs it to recreate an ancestor's revert. It omits that turn's messages and tool results. Older archives missing this boundary can still be inspected and can be re-exported from the source profile when importing would need to replay it. Import full ancestors before their forks when migrating a series of related sessions, because a prefix in a fork archive omits records from discarded branches.
 
 ### Managed isolated imports
 
